@@ -1,0 +1,32 @@
+# TRACE Protocol — Render Deployment Config
+# https://render.com/docs/render-yaml-ref
+
+services:
+  - type: web
+    name: trace-api
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: node dist/middleware/server.js
+    healthCheckPath: /v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: TRACE_PACKAGE_ID
+        value: 0x3eff0f24ece1bd96bef48ba534eb498331a87cb1fb90d30de5bf1ec940cc648e
+      - key: TRACE_TREASURY_ID
+        value: 0x5dcd795b9b23e0344608b92d58f2a0c0438558243ce5db9c821292f90df9a54a
+      - key: WALRUS_PUBLISHER
+        value: https://publisher.walrus-testnet.walrus.space
+      - key: WALRUS_AGGREGATOR
+        value: https://aggregator.walrus-testnet.walrus.space
+      - key: WALRUS_EPOCHS
+        value: 5
+      - key: ALLOWED_ORIGINS
+        value: http://www.traceprotocol.co,https://www.traceprotocol.co
+      # Set TRACE_PRIVATE_KEY in Render dashboard — never commit to repo
+      - key: TRACE_PRIVATE_KEY
+        sync: false

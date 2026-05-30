@@ -1,0 +1,7 @@
+build/*
+traces/*
+.trace
+.coverage*
+Pub.*.toml
+.env
+node_modules/
