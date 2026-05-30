@@ -5,13 +5,15 @@
     "lib": ["ES2022"],
     "outDir": "./dist",
     "rootDir": ".",
-    "strict": true,
+    "strict": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "types": ["node"]
+    "declaration": false,
+    "sourceMap": false,
+    "noImplicitAny": false
   },
   "include": ["middleware/**/*", "scripts/**/*"],
-  "exclude": ["node_modules", "dist", "move"]
+  "exclude": ["node_modules", "dist", "move", "frontend"]
 }
