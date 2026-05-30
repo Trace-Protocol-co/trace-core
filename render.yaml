@@ -1,6 +1,3 @@
-# TRACE Protocol — Render Deployment Config
-# https://render.com/docs/render-yaml-ref
-
 services:
   - type: web
     name: trace-api
@@ -23,10 +20,13 @@ services:
         value: https://publisher.walrus-testnet.walrus.space
       - key: WALRUS_AGGREGATOR
         value: https://aggregator.walrus-testnet.walrus.space
+      - key: WALRUS_EXPLORER
+        value: https://walruscan.com/testnet/blob
       - key: WALRUS_EPOCHS
         value: 5
       - key: ALLOWED_ORIGINS
-        value: http://www.traceprotocol.co,https://www.traceprotocol.co
-      # Set TRACE_PRIVATE_KEY in Render dashboard — never commit to repo
+        value: http://www.traceprotocol.co,https://www.traceprotocol.co,http://localhost:5173
+      - key: APP_URL
+        value: http://www.traceprotocol.co
       - key: TRACE_PRIVATE_KEY
         sync: false

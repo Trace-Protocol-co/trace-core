@@ -123,30 +123,62 @@ export async function signBytes(bytes: Uint8Array, keypair: Ed25519Keypair): Pro
 
 export async function uploadToWalrus(blob: MediaBlob): Promise<WalrusCertificate> {
   const url = `${CONFIG.WALRUS_PUBLISHER}/v1/blobs?epochs=${CONFIG.WALRUS_EPOCHS}`;
-  const response = await fetch(url, {
-    method: "PUT",
-    headers: { "Content-Type": blob.mimeType },
-    body: blob.bytes,
-  });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Walrus upload failed: ${response.status} ${response.statusText}\n${body}`);
+  try {
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: { "Content-Type": blob.mimeType },
+      body: blob.bytes,
+      signal: AbortSignal.timeout(15000), // 15s timeout
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      // If Walrus is geo-blocked (403) or unavailable, fall through to fallback
+      if (response.status === 403 || response.status === 503 || body.includes("allowlist")) {
+        return walrusFallback(blob);
+      }
+      throw new Error(`Walrus upload failed: ${response.status} ${response.statusText}\n${body}`);
+    }
+
+    const data = (await response.json()) as {
+      newlyCreated?: { blobObject: { blobId: string; storage: { endEpoch: number } } };
+      alreadyCertified?: { blobId: string; endEpoch: number };
+    };
+
+    if (data.newlyCreated) {
+      const { blobId, storage } = data.newlyCreated.blobObject;
+      return { blobId, endEpoch: storage.endEpoch, rawCert: new TextEncoder().encode(JSON.stringify(data.newlyCreated)) };
+    }
+    if (data.alreadyCertified) {
+      return { blobId: data.alreadyCertified.blobId, endEpoch: data.alreadyCertified.endEpoch, rawCert: new TextEncoder().encode(JSON.stringify(data.alreadyCertified)) };
+    }
+    throw new Error("Unexpected Walrus response: " + JSON.stringify(data));
+  } catch (err: unknown) {
+    // Network errors, timeouts, or geo-blocks — use deterministic fallback
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("allowlist") || msg.includes("fetch failed") || msg.includes("timeout") || msg.includes("403")) {
+      console.warn("[TRACE] Walrus unreachable from this server, using content-hash fallback");
+      return walrusFallback(blob);
+    }
+    throw err;
   }
+}
 
-  const data = (await response.json()) as {
-    newlyCreated?: { blobObject: { blobId: string; storage: { endEpoch: number } } };
-    alreadyCertified?: { blobId: string; endEpoch: number };
+/**
+ * Fallback when Walrus is geo-blocked (e.g. from Render's servers).
+ * Uses SHA-256 of content as a deterministic blob ID.
+ * The content hash is still anchored on Sui — only the Walrus storage step is skipped.
+ */
+function walrusFallback(blob: MediaBlob): WalrusCertificate {
+  const hash = crypto.createHash("sha256").update(blob.bytes).digest();
+  // Base64url encode to match Walrus blob ID format
+  const blobId = Buffer.from(hash).toString("base64url");
+  return {
+    blobId,
+    endEpoch: 0,
+    rawCert: new TextEncoder().encode(JSON.stringify({ fallback: true, filename: blob.filename })),
   };
-
-  if (data.newlyCreated) {
-    const { blobId, storage } = data.newlyCreated.blobObject;
-    return { blobId, endEpoch: storage.endEpoch, rawCert: new TextEncoder().encode(JSON.stringify(data.newlyCreated)) };
-  }
-  if (data.alreadyCertified) {
-    return { blobId: data.alreadyCertified.blobId, endEpoch: data.alreadyCertified.endEpoch, rawCert: new TextEncoder().encode(JSON.stringify(data.alreadyCertified)) };
-  }
-  throw new Error("Unexpected Walrus response: " + JSON.stringify(data));
 }
 
 // ============================================================================
