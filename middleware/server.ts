@@ -29,7 +29,18 @@ import { generateCertificateHTML, CertificateData } from "./certificate";
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
-app.use(cors());
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "http://localhost:5173,http://localhost:3000")
+  .split(",").map((o) => o.trim());
+
+app.use(cors({
+  origin: (origin, cb) => {
+    // Allow requests with no origin (curl, Postman, server-to-server)
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.some((o) => origin.startsWith(o))) return cb(null, true);
+    cb(new Error(`CORS: ${origin} not allowed`));
+  },
+  credentials: true,
+}));
 app.use(express.json());
 
 // ============================================================================
@@ -155,11 +166,24 @@ app.post("/v1/register", upload.single("file"), async (req: Request, res: Respon
       parent_id: parentId,
       edit_type: editTypeStr = "0",
       ai_score: aiScoreStr = "0",
+      creator_address,   // zkLogin address from frontend — who is actually registering
+      creator_email,     // display identity (e.g. john@channelstv.com)
     } = req.body;
+
+    // Require creator identity for registration (Producer side must authenticate)
+    if (!creator_address) {
+      return res.status(401).json({
+        error: "Authentication required. Please sign in with Google to register media.",
+        code: "UNAUTHENTICATED",
+      });
+    }
 
     const editType = parseInt(editTypeStr, 10) as EditTypeValue;
     const aiScore  = Math.min(10000, Math.max(0, parseInt(aiScoreStr, 10)));
-    const keypair  = getKeypair();
+
+    // Server keypair pays gas (sponsored transactions pattern)
+    // The creator_address is stored as the identity anchor — WHO registered this
+    const keypair = getKeypair();
 
     const result = await registerMedia(
       { blob: { bytes: new Uint8Array(req.file.buffer), mimeType: req.file.mimetype, filename: req.file.originalname }, parentId, editType, aiScore, description },
@@ -174,12 +198,15 @@ app.post("/v1/register", upload.single("file"), async (req: Request, res: Respon
     const integrity = editType === EditType.AI_REMIX || aiScore >= 7500 ? 3
                     : editType !== EditType.ORIGINAL ? 1 : 0;
 
+    // Use the zkLogin address as creator — not the server keypair address
+    const creatorIdentity = creator_address || keypair.getPublicKey().toSuiAddress();
+
     const entry: RegistryEntry = {
       mediaId: result.mediaId,
       blobId: result.blobId,
       contentHash: contentHashHex,
       perceptualHash: pHashHex,
-      creator: keypair.getPublicKey().toSuiAddress(),
+      creator: creatorIdentity,
       timestamp: result.timestamp,
       suiTx: result.suiTx,
       editType,

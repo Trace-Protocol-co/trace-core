@@ -40,7 +40,7 @@ const EDIT_TYPE_LABELS: Record<number, string> = {
 };
 
 export async function generateCertificateHTML(data: CertificateData): Promise<string> {
-  const verifyUrl = `https://trace-protocol.app/verify?hash=${data.contentHash}`;
+  const verifyUrl = `${process.env.APP_URL ?? "https://www.traceprotocol.co"}/verify?hash=${data.contentHash}`;
   const suiExplorerUrl = `https://suiexplorer.com/txblock/${data.suiTx}?network=testnet`;
   const walrusUrl = `${CONFIG.WALRUS_EXPLORER}/${data.blobId}`;
   const integrityColor = INTEGRITY_COLORS[data.integrity] ?? "#94a3b8";
