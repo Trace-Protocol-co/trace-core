@@ -5,6 +5,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { Pool } from "pg";
 
 export interface RegistryEntry {
   mediaId:       string;
@@ -51,12 +52,11 @@ function loadFromFile() {
 }
 
 // ── PostgreSQL ────────────────────────────────────────────────────────────────
-let pgPool: import("pg").Pool | null = null;
+let pgPool: Pool | null = null;
 
-async function getPool() {
+async function getPool(): Promise<Pool | null> {
   if (!process.env.DATABASE_URL) return null;
   if (pgPool) return pgPool;
-  const { Pool } = await import("pg");
   pgPool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
@@ -65,7 +65,7 @@ async function getPool() {
   return pgPool;
 }
 
-async function initSchema(pool: import("pg").Pool) {
+async function initSchema(pool: Pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS media_registry (
       media_id        VARCHAR PRIMARY KEY,

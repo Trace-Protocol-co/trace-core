@@ -63,10 +63,6 @@ app.use(express.json());
 // Initialize DB on startup
 dbInit().catch(console.error);
 
-// Convenience accessors (use in-memory cache for fast reads)
-const registry     = { get: dbGetByHash,    set: async (k: string, v: RegistryEntry) => dbSave(v) };
-const registryById = { get: dbGetById,      set: async (k: string, v: RegistryEntry) => dbSave(v) };
-
 // In-memory staking and org records
 interface StakeRecord {
   depositId: string;
@@ -123,7 +119,8 @@ function pHashSimilarity(a: string, b: string): number {
 
 function buildProvenanceChain(mediaId: string): object[] {
   const chain: object[] = [];
-  let current = registryById.get(mediaId);
+  const memById = dbGetMemRegistryById();
+  let current = memById.get(mediaId);
   while (current) {
     chain.unshift({
       mediaId: current.mediaId,
@@ -134,7 +131,7 @@ function buildProvenanceChain(mediaId: string): object[] {
       timestamp: new Date(current.timestamp).toISOString(),
       revoked: current.revoked,
     });
-    current = current.parentId ? registryById.get(current.parentId) : undefined;
+    current = current.parentId ? memById.get(current.parentId) : undefined;
   }
   return chain;
 }
