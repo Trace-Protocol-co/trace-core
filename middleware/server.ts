@@ -36,6 +36,10 @@ app.use(cors({
   origin: (origin, cb) => {
     // Allow requests with no origin (curl, Postman, server-to-server)
     if (!origin) return cb(null, true);
+    // Allow Chrome extensions
+    if (origin.startsWith("chrome-extension://")) return cb(null, true);
+    // Allow moz-extension for Firefox
+    if (origin.startsWith("moz-extension://")) return cb(null, true);
     if (ALLOWED_ORIGINS.some((o) => origin.startsWith(o))) return cb(null, true);
     cb(new Error(`CORS: ${origin} not allowed`));
   },
