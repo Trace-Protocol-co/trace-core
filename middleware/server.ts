@@ -25,6 +25,11 @@ import {
   buildFilChallengeTx,
 } from "./traceProcessor";
 import { generateCertificateHTML, CertificateData } from "./certificate";
+import {
+  dbInit, dbSave, dbGetByHash, dbGetById, dbList, dbCount,
+  dbGetMemRegistry, dbGetMemRegistryById,
+  type RegistryEntry,
+} from "./db";
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
@@ -48,62 +53,19 @@ app.use(cors({
 app.use(express.json());
 
 // ============================================================================
-// In-memory registry
+// Registry — backed by PostgreSQL (with in-memory + file fallback)
 // ============================================================================
 
-interface RegistryEntry {
-  mediaId: string;
-  blobId: string;
-  contentHash: string;
-  perceptualHash: string;
-  creator: string;
-  timestamp: number;
-  suiTx: string;
-  editType: number;
-  integrity: number;
-  aiScore: number;
-  parentId?: string;
-  revoked: boolean;
-  certificateUrl: string;
-  description: string;
-}
+// ============================================================================
+// Registry — backed by PostgreSQL (with in-memory + file fallback)
+// ============================================================================
 
-const registry    = new Map<string, RegistryEntry>(); // key: contentHash
-const registryById = new Map<string, RegistryEntry>(); // key: mediaId
+// Initialize DB on startup
+dbInit().catch(console.error);
 
-// ── Persistence — save/load registry to disk so it survives restarts ──────────
-import * as fs from "fs";
-import * as path from "path";
-
-const DATA_FILE = path.join(process.cwd(), "data", "registry.json");
-
-function saveRegistry() {
-  try {
-    const dir = path.dirname(DATA_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const entries = Array.from(registryById.values());
-    fs.writeFileSync(DATA_FILE, JSON.stringify(entries, null, 2));
-  } catch (err) {
-    console.warn("[TRACE] Could not save registry:", err);
-  }
-}
-
-function loadRegistry() {
-  try {
-    if (!fs.existsSync(DATA_FILE)) return;
-    const entries: RegistryEntry[] = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-    for (const entry of entries) {
-      registry.set(entry.contentHash, entry);
-      registryById.set(entry.mediaId, entry);
-    }
-    console.log(`[TRACE] Loaded ${entries.length} entries from disk`);
-  } catch (err) {
-    console.warn("[TRACE] Could not load registry:", err);
-  }
-}
-
-// Load on startup
-loadRegistry();
+// Convenience accessors (use in-memory cache for fast reads)
+const registry     = { get: dbGetByHash,    set: async (k: string, v: RegistryEntry) => dbSave(v) };
+const registryById = { get: dbGetById,      set: async (k: string, v: RegistryEntry) => dbSave(v) };
 
 // In-memory staking and org records
 interface StakeRecord {
@@ -256,9 +218,7 @@ app.post("/v1/register", upload.single("file"), async (req: Request, res: Respon
       description,
     };
 
-    registry.set(contentHashHex, entry);
-    registryById.set(result.mediaId, entry);
-    saveRegistry(); // persist to disk
+    await dbSave(entry);
 
     res.json({
       media_id: result.mediaId,
@@ -287,7 +247,7 @@ app.post("/v1/verify", upload.single("file"), async (req: Request, res: Response
     const pHashHex = Buffer.from(pHash).toString("hex");
 
     // Step 1 — exact hash match
-    const exact = registry.get(contentHashHex);
+    const exact = await dbGetByHash(contentHashHex);
     if (exact) {
       return res.json({
         verdict: "VERIFIED_ORIGINAL",
@@ -299,9 +259,9 @@ app.post("/v1/verify", upload.single("file"), async (req: Request, res: Response
       });
     }
 
-    // Step 2 — perceptual similarity
+    // Step 2 — perceptual similarity (use in-memory cache)
     let bestMatch: { entry: RegistryEntry; similarity: number } | null = null;
-    for (const entry of registry.values()) {
+    for (const entry of dbGetMemRegistry().values()) {
       const sim = pHashSimilarity(pHashHex, entry.perceptualHash);
       if (sim > 0.9 && (!bestMatch || sim > bestMatch.similarity)) {
         bestMatch = { entry, similarity: sim };
@@ -338,8 +298,8 @@ app.post("/v1/verify", upload.single("file"), async (req: Request, res: Response
 // GET /v1/media/:id
 // ============================================================================
 
-app.get("/v1/media/:id", (req: Request, res: Response) => {
-  const entry = registryById.get(req.params.id);
+app.get("/v1/media/:id", async (req: Request, res: Response) => {
+  const entry = await dbGetById(req.params.id);
   if (!entry) return res.status(404).json({ error: "Not found" });
   res.json(entry);
 });
@@ -348,19 +308,20 @@ app.get("/v1/media/:id", (req: Request, res: Response) => {
 // GET /v1/media/:id/graph
 // ============================================================================
 
-app.get("/v1/media/:id/graph", (req: Request, res: Response) => {
+app.get("/v1/media/:id/graph", async (req: Request, res: Response) => {
   const nodes: RegistryEntry[] = [];
   const edges: { from: string; to: string; type: string }[] = [];
+  const memById = dbGetMemRegistryById();
 
   function collect(id: string) {
-    const node = registryById.get(id);
+    const node = memById.get(id);
     if (!node || nodes.find((n) => n.mediaId === id)) return;
     nodes.push(node);
     if (node.parentId) {
       edges.push({ from: node.parentId, to: id, type: "DECLARED" });
       collect(node.parentId);
     }
-    for (const other of registryById.values()) {
+    for (const other of memById.values()) {
       if (other.parentId === id) collect(other.mediaId);
     }
   }
@@ -376,7 +337,7 @@ app.get("/v1/media/:id/graph", (req: Request, res: Response) => {
 
 app.get("/v1/media/:id/certificate", async (req: Request, res: Response) => {
   try {
-    const entry = registryById.get(req.params.id);
+    const entry = await dbGetById(req.params.id);
     if (!entry) return res.status(404).json({ error: "Media not found" });
 
     const certData: CertificateData = {
@@ -407,65 +368,43 @@ app.get("/v1/media/:id/certificate", async (req: Request, res: Response) => {
 // GET /v1/explorer  — searchable registry table
 // ============================================================================
 
-app.get("/v1/explorer", (req: Request, res: Response) => {
+app.get("/v1/explorer", async (req: Request, res: Response) => {
   const {
-    creator,
-    integrity,
-    edit_type,
-    from_date,
-    to_date,
-    q,
-    sort = "timestamp",
-    order = "desc",
-    page = "1",
-    limit = "20",
+    creator, integrity, edit_type, from_date, to_date, q,
+    sort = "timestamp", order = "desc", page = "1", limit = "20",
   } = req.query as Record<string, string>;
 
-  let entries = Array.from(registryById.values());
-
-  // Filters
-  if (creator) entries = entries.filter((e) => e.creator.toLowerCase().includes(creator.toLowerCase()));
-  if (integrity !== undefined) entries = entries.filter((e) => e.integrity === parseInt(integrity));
-  if (edit_type !== undefined) entries = entries.filter((e) => e.editType === parseInt(edit_type));
-  if (from_date) entries = entries.filter((e) => e.timestamp >= new Date(from_date).getTime());
-  if (to_date)   entries = entries.filter((e) => e.timestamp <= new Date(to_date).getTime());
-  if (q) {
-    const lower = q.toLowerCase();
-    entries = entries.filter((e) =>
-      e.mediaId.toLowerCase().includes(lower) ||
-      e.description.toLowerCase().includes(lower) ||
-      e.contentHash.toLowerCase().includes(lower) ||
-      e.creator.toLowerCase().includes(lower)
-    );
+  try {
+    const result = await dbList({
+      creator, integrity: integrity !== undefined ? parseInt(integrity) : undefined,
+      editType: edit_type !== undefined ? parseInt(edit_type) : undefined,
+      fromDate: from_date ? new Date(from_date).getTime() : undefined,
+      toDate: to_date ? new Date(to_date).getTime() : undefined,
+      q, sort, order,
+      page: Math.max(1, parseInt(page)),
+      limit: Math.min(100, parseInt(limit)),
+    });
+    const limitNum = Math.min(100, parseInt(limit));
+    res.json({
+      items: result.items, total: result.total,
+      page: Math.max(1, parseInt(page)),
+      pages: Math.ceil(result.total / limitNum),
+      limit: limitNum,
+    });
+  } catch (err: unknown) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
-
-  // Sort
-  entries.sort((a, b) => {
-    const aVal = a[sort as keyof RegistryEntry] as number | string;
-    const bVal = b[sort as keyof RegistryEntry] as number | string;
-    if (order === "asc") return aVal > bVal ? 1 : -1;
-    return aVal < bVal ? 1 : -1;
-  });
-
-  // Paginate
-  const pageNum  = Math.max(1, parseInt(page));
-  const limitNum = Math.min(100, parseInt(limit));
-  const total    = entries.length;
-  const pages    = Math.ceil(total / limitNum);
-  const items    = entries.slice((pageNum - 1) * limitNum, pageNum * limitNum);
-
-  res.json({ items, total, page: pageNum, pages, limit: limitNum });
 });
 
 // ============================================================================
 // GET /v1/search
 // ============================================================================
 
-app.get("/v1/search", (req: Request, res: Response) => {
+app.get("/v1/search", async (req: Request, res: Response) => {
   const { hash, phash, threshold = "0.9" } = req.query as Record<string, string>;
-  if (hash) return res.json(registry.get(hash) ?? null);
+  if (hash) return res.json(await dbGetByHash(hash) ?? null);
   if (phash) {
-    const results = Array.from(registry.values())
+    const results = Array.from(dbGetMemRegistry().values())
       .map((e) => ({ media_id: e.mediaId, similarity: pHashSimilarity(phash, e.perceptualHash) }))
       .filter((r) => r.similarity >= parseFloat(threshold))
       .sort((a, b) => b.similarity - a.similarity);
@@ -613,15 +552,16 @@ app.post("/v1/delegate", async (req: Request, res: Response) => {
 // GET /v1/health
 // ============================================================================
 
-app.get("/v1/health", (_req: Request, res: Response) => {
+app.get("/v1/health", async (_req: Request, res: Response) => {
   res.json({
     status: "ok",
-    registered: registry.size,
+    registered: await dbCount(),
     network: CONFIG.SUI_NETWORK,
     package_id: CONFIG.PACKAGE_ID,
     treasury_id: CONFIG.TREASURY_ID,
     stakes: stakes.size,
     orgs: orgs.size,
+    db: process.env.DATABASE_URL ? "postgresql" : "file",
   });
 });
 
