@@ -71,6 +71,40 @@ interface RegistryEntry {
 const registry    = new Map<string, RegistryEntry>(); // key: contentHash
 const registryById = new Map<string, RegistryEntry>(); // key: mediaId
 
+// ── Persistence — save/load registry to disk so it survives restarts ──────────
+import * as fs from "fs";
+import * as path from "path";
+
+const DATA_FILE = path.join(process.cwd(), "data", "registry.json");
+
+function saveRegistry() {
+  try {
+    const dir = path.dirname(DATA_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const entries = Array.from(registryById.values());
+    fs.writeFileSync(DATA_FILE, JSON.stringify(entries, null, 2));
+  } catch (err) {
+    console.warn("[TRACE] Could not save registry:", err);
+  }
+}
+
+function loadRegistry() {
+  try {
+    if (!fs.existsSync(DATA_FILE)) return;
+    const entries: RegistryEntry[] = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+    for (const entry of entries) {
+      registry.set(entry.contentHash, entry);
+      registryById.set(entry.mediaId, entry);
+    }
+    console.log(`[TRACE] Loaded ${entries.length} entries from disk`);
+  } catch (err) {
+    console.warn("[TRACE] Could not load registry:", err);
+  }
+}
+
+// Load on startup
+loadRegistry();
+
 // In-memory staking and org records
 interface StakeRecord {
   depositId: string;
@@ -224,6 +258,7 @@ app.post("/v1/register", upload.single("file"), async (req: Request, res: Respon
 
     registry.set(contentHashHex, entry);
     registryById.set(result.mediaId, entry);
+    saveRegistry(); // persist to disk
 
     res.json({
       media_id: result.mediaId,
