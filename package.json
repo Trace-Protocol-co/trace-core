@@ -1,10 +1,11 @@
 {
   "name": "trace-protocol",
   "version": "1.0.0",
+  "type": "module",
   "description": "TRACE — The Authenticity Layer for the Internet",
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only middleware/server.ts",
-    "agent": "ts-node-dev --respawn --transpile-only agent/index.ts",
+    "dev": "node --loader ts-node/esm --no-warnings middleware/server.ts",
+    "agent": "node --loader ts-node/esm --no-warnings agent/index.ts",
     "build": "tsc",
     "start": "node dist/middleware/server.js",
     "test:e2e": "node scripts/e2eTest.js",

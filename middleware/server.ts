@@ -695,9 +695,11 @@ app.get("/agent/alerts", (_req: Request, res: Response) => {
 
 app.get("/agent/recall", async (req: Request, res: Response) => {
   const { q = "AI generated images", limit = "5" } = req.query as Record<string, string>;
-  // Import recall from memwal integration
   try {
-    const { recallMemories } = await import("../agent/memwal-integration");
+    if (!process.env.MEMWAL_PRIVATE_KEY) {
+      return res.json({ query: q, results: [], total: 0, powered_by: "MemWal", error: "MemWal not configured" });
+    }
+    const { recallMemories } = await import("../agent/memwal-integration.js");
     const results = await recallMemories(q, parseInt(limit));
     res.json({ query: q, results, total: results.length, powered_by: "MemWal" });
   } catch {
@@ -707,7 +709,10 @@ app.get("/agent/recall", async (req: Request, res: Response) => {
 
 app.get("/agent/health", async (_req: Request, res: Response) => {
   try {
-    const { checkMemWalHealth } = await import("../agent/memwal-integration");
+    if (!process.env.MEMWAL_PRIVATE_KEY) {
+      return res.json({ agent: "ok", memwal: { connected: false }, version: "3.0" });
+    }
+    const { checkMemWalHealth } = await import("../agent/memwal-integration.js");
     const mw = await checkMemWalHealth();
     res.json({ agent: "ok", memwal: mw, version: "3.0" });
   } catch {

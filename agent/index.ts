@@ -16,6 +16,7 @@ import "dotenv/config";
 import * as fs   from "fs";
 import * as path from "path";
 import express, { Request, Response } from "express";
+
 import {
   rememberVerification,
   rememberSession,
@@ -23,8 +24,6 @@ import {
   checkMemWalHealth,
   getMemWalClient,
 } from "./memwal-integration.js";
-
-const TRACE_API        = process.env.TRACE_API_URL    ?? "https://trace-cbvb.onrender.com";
 const WALRUS_PUB       = process.env.WALRUS_PUBLISHER  ?? "https://publisher.walrus-testnet.walrus.space";
 const WALRUS_AGG       = process.env.WALRUS_AGGREGATOR ?? "https://aggregator.walrus-testnet.walrus.space";
 const MEM_FILE         = path.join(process.cwd(), "agent", "memory.json");
@@ -264,12 +263,16 @@ async function verifyOne(
 
 // ── Scan session ──────────────────────────────────────────────────────────────
 async function runScanSession(memory: AgentMemory) {
-  const session = {
+  const session: {
+    id: number; started: string; ended?: string;
+    scanned: number; verdicts: Record<string, number>;
+    sources_checked: string[]; memwal_session_blob?: string;
+  } = {
     id:              memory.sessions.length + 1,
     started:         new Date().toISOString(),
     scanned:         0,
-    verdicts:        {} as Record<string, number>,
-    sources_checked: [] as string[],
+    verdicts:        {},
+    sources_checked: [],
   };
 
   console.log(`\n🔍 Session #${session.id} — ${new Date().toLocaleString()}`);
