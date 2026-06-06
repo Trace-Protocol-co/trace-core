@@ -4,10 +4,11 @@
  */
 
 import "dotenv/config";
-import { SuiClient, getFullnodeUrl, type SuiObjectChangeCreated } from "@mysten/sui/client";
+import { SuiJsonRpcClient as SuiClient, getJsonRpcFullnodeUrl as getFullnodeUrl, type SuiObjectChangeCreated } from "@mysten/sui/jsonRpc";
 import { Transaction } from "@mysten/sui/transactions";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import * as crypto from "crypto";
+
 
 // ============================================================================
 // Configuration
