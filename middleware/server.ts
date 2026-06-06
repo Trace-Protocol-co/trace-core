@@ -614,6 +614,7 @@ function localAiEstimate(buf: Buffer): number {
 }
 
 // ── Health ────────────────────────────────────────────────────────────────────
+app.get("/v1/health", async (_req: Request, res: Response) => {
   res.json({
     status: "ok",
     registered: await dbCount(),
