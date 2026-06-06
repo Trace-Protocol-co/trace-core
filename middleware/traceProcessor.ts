@@ -92,7 +92,7 @@ export interface TelemetryOutput {
 let _client: SuiClient | null = null;
 
 export function getSuiClient(): SuiClient {
-  if (!_client) _client = new SuiClient({ url: CONFIG.SUI_RPC });
+  if (!_client) _client = new SuiClient({ url: CONFIG.SUI_RPC, network: CONFIG.SUI_NETWORK });
   return _client;
 }
 
