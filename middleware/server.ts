@@ -711,7 +711,7 @@ app.post("/agent/verify", express.json(), async (req: Request, res: Response) =>
 
     const form = new FormData();
     form.append("file", new Blob([imgBuf]), "image.jpg");
-    const verRes  = await fetch(`http://localhost:${process.env.PORT ?? 3001}/v1/verify`, {
+    const verRes  = await fetch(`http://localhost:${process.env.PORT ?? "3001"}/v1/verify`, {
       method: "POST", body: form,
     });
     const verData = await verRes.json() as { verdict: string; confidence: number };
@@ -743,6 +743,8 @@ app.post("/agent/verify", express.json(), async (req: Request, res: Response) =>
   }
 });
 
+
+const PORT = parseInt(process.env.PORT ?? "3001", 10);
 
 app.listen(PORT, () => {
   console.log(`[TRACE API] Listening on http://localhost:${PORT}`);
