@@ -1,75 +1,85 @@
 /**
- * TRACE Verification Agent v2
+ * TRACE Verification Agent v3 — with MemWal
  *
  * A production-grade autonomous agent that:
  * 1. Fetches real images from live RSS news feeds
  * 2. Verifies each against the TRACE registry
  * 3. Runs AI detection on unverified media
- * 4. Stores persistent memory on Walrus — survives restarts
- * 5. Detects coordinated inauthentic behaviour patterns
- * 6. Exposes HTTP API so other agents can query its knowledge
- * 7. Alerts when the same fake image appears across multiple sources
+ * 4. Stores persistent memory on Walrus Core — survives restarts
+ * 5. Stores semantic memory on MemWal — cross-agent queryable
+ * 6. Detects coordinated inauthentic behaviour patterns
+ * 7. Exposes HTTP API so other agents can query its knowledge
+ * 8. Alerts when the same fake image appears across multiple sources
  */
 
 import "dotenv/config";
 import * as fs   from "fs";
 import * as path from "path";
 import express, { Request, Response } from "express";
+import {
+  rememberVerification,
+  rememberSession,
+  recallMemories,
+  checkMemWalHealth,
+  getMemWalClient,
+} from "./memwal-integration";
 
-const TRACE_API  = process.env.TRACE_API_URL    ?? "https://trace-cbvb.onrender.com";
-const WALRUS_PUB = process.env.WALRUS_PUBLISHER  ?? "https://publisher.walrus-testnet.walrus.space";
-const WALRUS_AGG = process.env.WALRUS_AGGREGATOR ?? "https://aggregator.walrus-testnet.walrus.space";
-const MEM_FILE   = path.join(process.cwd(), "agent", "memory.json");
-const SCAN_INTERVAL_MS = parseInt(process.env.AGENT_INTERVAL ?? "300000"); // 5 min default
+const TRACE_API        = process.env.TRACE_API_URL    ?? "https://trace-cbvb.onrender.com";
+const WALRUS_PUB       = process.env.WALRUS_PUBLISHER  ?? "https://publisher.walrus-testnet.walrus.space";
+const WALRUS_AGG       = process.env.WALRUS_AGGREGATOR ?? "https://aggregator.walrus-testnet.walrus.space";
+const MEM_FILE         = path.join(process.cwd(), "agent", "memory.json");
+const SCAN_INTERVAL_MS = parseInt(process.env.AGENT_INTERVAL ?? "300000");
 
 // ── Real RSS news sources ─────────────────────────────────────────────────────
-// These are publicly accessible RSS feeds with real news images
 const RSS_SOURCES = [
-  { name: "BBC News",       url: "https://feeds.bbci.co.uk/news/rss.xml" },
-  { name: "Reuters",        url: "https://feeds.reuters.com/reuters/topNews" },
-  { name: "AP News",        url: "https://rsshub.app/apnews/topics/apf-topnews" },
-  { name: "Al Jazeera",     url: "https://www.aljazeera.com/xml/rss/all.xml" },
-  { name: "Guardian",       url: "https://www.theguardian.com/world/rss" },
+  { name: "BBC News",   url: "https://feeds.bbci.co.uk/news/rss.xml" },
+  { name: "Reuters",    url: "https://feeds.reuters.com/reuters/topNews" },
+  { name: "AP News",    url: "https://rsshub.app/apnews/topics/apf-topnews" },
+  { name: "Al Jazeera", url: "https://www.aljazeera.com/xml/rss/all.xml" },
+  { name: "Guardian",   url: "https://www.theguardian.com/world/rss" },
 ];
 
 // ── Memory schema ─────────────────────────────────────────────────────────────
 interface SeenEntry {
-  verdict:    string;
-  confidence: number;
-  first_seen: string;
-  last_seen:  string;
-  seen_count: number;
-  sources:    string[];
-  media_id?:  string;
-  image_url:  string;
-  ai_score?:  number;
+  verdict:      string;
+  confidence:   number;
+  first_seen:   string;
+  last_seen:    string;
+  seen_count:   number;
+  sources:      string[];
+  media_id?:    string;
+  image_url:    string;
+  ai_score?:    number;
+  memwal_blob?: string; // ← NEW: MemWal blob reference
 }
 
 interface AgentMemory {
   version:          number;
   walrus_blob_id:   string | null;
+  memwal_enabled:   boolean;        // ← NEW
   last_saved:       string;
   total_scanned:    number;
   total_verified:   number;
   total_modified:   number;
   total_unverified: number;
   total_ai:         number;
-  seen:             Record<string, SeenEntry>; // key: sha256 hash
+  seen:             Record<string, SeenEntry>;
   alerts: {
     repeated_fakes:      { hash: string; sources: string[]; count: number }[];
     coordinated_sharing: { image_url: string; sources: string[] }[];
   };
   sessions: {
-    id:       number;
-    started:  string;
-    ended?:   string;
-    scanned:  number;
-    verdicts: Record<string, number>;
-    sources_checked: string[];
+    id:                  number;
+    started:             string;
+    ended?:              string;
+    scanned:             number;
+    verdicts:            Record<string, number>;
+    sources_checked:     string[];
+    memwal_session_blob?: string; // ← NEW
   }[];
 }
 
-// ── Walrus memory layer ───────────────────────────────────────────────────────
+// ── Walrus Core memory layer ──────────────────────────────────────────────────
 async function saveToWalrus(memory: AgentMemory): Promise<string | null> {
   try {
     const blob = Buffer.from(JSON.stringify(memory));
@@ -80,7 +90,7 @@ async function saveToWalrus(memory: AgentMemory): Promise<string | null> {
     });
     if (!res.ok) throw new Error(`${res.status}`);
     const data = await res.json() as {
-      newlyCreated?:    { blobObject?: { blobId?: string } };
+      newlyCreated?:     { blobObject?: { blobId?: string } };
       alreadyCertified?: { blobId?: string };
     };
     return data.newlyCreated?.blobObject?.blobId
@@ -94,7 +104,7 @@ async function saveToWalrus(memory: AgentMemory): Promise<string | null> {
 
 async function loadFromWalrus(blobId: string): Promise<AgentMemory | null> {
   try {
-    const res  = await fetch(`${WALRUS_AGG}/v1/${blobId}`);
+    const res = await fetch(`${WALRUS_AGG}/v1/${blobId}`);
     if (!res.ok) throw new Error(`${res.status}`);
     return await res.json() as AgentMemory;
   } catch { return null; }
@@ -103,7 +113,8 @@ async function loadFromWalrus(blobId: string): Promise<AgentMemory | null> {
 // ── Local memory ──────────────────────────────────────────────────────────────
 function emptyMemory(): AgentMemory {
   return {
-    version: 2, walrus_blob_id: null,
+    version: 3, walrus_blob_id: null,
+    memwal_enabled: !!getMemWalClient(),
     last_saved: new Date().toISOString(),
     total_scanned: 0, total_verified: 0, total_modified: 0,
     total_unverified: 0, total_ai: 0,
@@ -127,17 +138,15 @@ function saveLocal(m: AgentMemory) {
   fs.writeFileSync(MEM_FILE, JSON.stringify(m, null, 2));
 }
 
-// ── RSS parser — extract image URLs from feed ─────────────────────────────────
+// ── RSS parser ────────────────────────────────────────────────────────────────
 async function fetchImagesFromRSS(source: { name: string; url: string }): Promise<string[]> {
   try {
     const res = await fetch(source.url, {
-      headers: { "User-Agent": "TRACE-Agent/2.0 (media verification bot)" },
+      headers: { "User-Agent": "TRACE-Agent/3.0 (media verification bot)" },
       signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) return [];
     const xml = await res.text();
-
-    // Extract image URLs from enclosures, media:content, og:image
     const urls: string[] = [];
     const patterns = [
       /enclosure[^>]+url="([^"]+\.(?:jpg|jpeg|png|webp))"/gi,
@@ -149,28 +158,27 @@ async function fetchImagesFromRSS(source: { name: string; url: string }): Promis
       let match;
       while ((match = pattern.exec(xml)) !== null) {
         if (match[1] && !urls.includes(match[1])) urls.push(match[1]);
-        if (urls.length >= 10) break; // max 10 per source
+        if (urls.length >= 10) break;
       }
     }
     return urls.slice(0, 10);
   } catch { return []; }
 }
 
-// ── Hash image bytes ──────────────────────────────────────────────────────────
+// ── Hash ──────────────────────────────────────────────────────────────────────
 async function hashBuffer(buf: ArrayBuffer): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", buf);
   return Array.from(new Uint8Array(hash))
     .map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-// ── Verify one image URL ──────────────────────────────────────────────────────
+// ── Verify one image ──────────────────────────────────────────────────────────
 async function verifyOne(
   imageUrl: string,
   sourceName: string,
   memory: AgentMemory
 ): Promise<{ verdict: string; confidence: number; fromCache: boolean }> {
 
-  // Download image
   let imgBuf: ArrayBuffer;
   try {
     const r = await fetch(imageUrl, { signal: AbortSignal.timeout(8000) });
@@ -187,7 +195,6 @@ async function verifyOne(
     entry.last_seen = new Date().toISOString();
     if (!entry.sources.includes(sourceName)) {
       entry.sources.push(sourceName);
-      // Alert: same image across multiple sources
       if (entry.sources.length >= 2 &&
           (entry.verdict === "UNVERIFIED" || entry.verdict === "AI_GENERATED")) {
         const existing = memory.alerts.repeated_fakes.find(a => a.hash === hash);
@@ -224,7 +231,12 @@ async function verifyOne(
     const confidence = data.confidence ?? 0;
     const mediaId    = data.provenance_chain?.[0]?.mediaId;
 
-    // Store in memory
+    // Store in MemWal (semantic, encrypted, cross-agent shareable) ← NEW
+    const memwalBlob = await rememberVerification({
+      imageUrl, source: sourceName, verdict, confidence, hash, mediaId,
+    });
+
+    // Store in local memory cache
     memory.seen[hash] = {
       verdict, confidence,
       first_seen:  new Date().toISOString(),
@@ -234,6 +246,7 @@ async function verifyOne(
       media_id:    mediaId,
       image_url:   imageUrl,
       ai_score:    data.ai_score,
+      memwal_blob: memwalBlob ?? undefined, // ← NEW
     };
 
     // Update totals
@@ -249,7 +262,7 @@ async function verifyOne(
   }
 }
 
-// ── One scan session ──────────────────────────────────────────────────────────
+// ── Scan session ──────────────────────────────────────────────────────────────
 async function runScanSession(memory: AgentMemory) {
   const session = {
     id:              memory.sessions.length + 1,
@@ -260,6 +273,8 @@ async function runScanSession(memory: AgentMemory) {
   };
 
   console.log(`\n🔍 Session #${session.id} — ${new Date().toLocaleString()}`);
+  const memwalOk = !!getMemWalClient();
+  console.log(`   MemWal: ${memwalOk ? "✅ connected" : "⚠ not configured"}`);
   console.log(`   Scanning ${RSS_SOURCES.length} news sources...\n`);
 
   for (const source of RSS_SOURCES) {
@@ -290,8 +305,7 @@ async function runScanSession(memory: AgentMemory) {
       console.log(`    ${emoji} ${verdict} (${(confidence*100).toFixed(0)}%)${cached}`);
       session.scanned++;
       session.verdicts[verdict] = (session.verdicts[verdict] ?? 0) + 1;
-
-      await new Promise(r => setTimeout(r, 500)); // rate limit
+      await new Promise(r => setTimeout(r, 500));
     }
   }
 
@@ -299,17 +313,34 @@ async function runScanSession(memory: AgentMemory) {
   memory.sessions.push(session);
   memory.last_saved = new Date().toISOString();
 
-  // Save to Walrus
-  console.log("\n  💾 Saving memory to Walrus...");
+  // Save to Walrus Core (cold storage — full snapshot)
+  console.log("\n  💾 Saving memory to Walrus Core...");
   const blobId = await saveToWalrus(memory);
   if (blobId) {
     memory.walrus_blob_id = blobId;
     console.log(`  ✅ Walrus blob: ${blobId}`);
     console.log(`  🔗 ${WALRUS_AGG}/v1/${blobId}`);
   }
+
+  // Save session summary to MemWal (hot semantic memory) ← NEW
+  const memwalSessionBlob = await rememberSession({
+    sessionId:      session.id,
+    sourcesChecked: session.sources_checked,
+    totalScanned:   session.scanned,
+    verdicts:       session.verdicts,
+    alerts:         memory.alerts.repeated_fakes.length,
+    walrusBlobId:   blobId ?? undefined,
+  });
+
+  if (memwalSessionBlob) {
+    const last = memory.sessions[memory.sessions.length - 1];
+    if (last) (last as typeof last & { memwal_session_blob?: string }).memwal_session_blob = memwalSessionBlob;
+    console.log(`  🧠 MemWal session stored: ${memwalSessionBlob}`);
+  }
+
+  memory.memwal_enabled = !!getMemWalClient();
   saveLocal(memory);
 
-  // Session summary
   console.log(`\n  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
   console.log(`  Session #${session.id} complete`);
   console.log(`  Scanned: ${session.scanned} images across ${session.sources_checked.length} sources`);
@@ -330,7 +361,8 @@ agentApp.get("/agent/status", (_req: Request, res: Response) => {
   const m = loadLocal();
   res.json({
     status:           "active",
-    version:          "2.0",
+    version:          "3.0-memwal",
+    memwal_enabled:   m.memwal_enabled,
     total_scanned:    m.total_scanned,
     total_verified:   m.total_verified,
     total_modified:   m.total_modified,
@@ -380,6 +412,19 @@ agentApp.get("/agent/seen/:hash", (req: Request, res: Response) => {
   res.json(entry);
 });
 
+// ← NEW: Semantic recall via MemWal
+agentApp.get("/agent/recall", async (req: Request, res: Response) => {
+  const { q = "AI generated images", limit = "5" } = req.query as Record<string, string>;
+  const results = await recallMemories(q, parseInt(limit));
+  res.json({ query: q, results, total: results.length, powered_by: "MemWal" });
+});
+
+// ← NEW: MemWal health
+agentApp.get("/agent/health", async (_req: Request, res: Response) => {
+  const mw = await checkMemWalHealth();
+  res.json({ agent: "ok", memwal: mw, version: "3.0" });
+});
+
 const AGENT_PORT = parseInt(process.env.AGENT_PORT ?? "3002");
 agentApp.listen(AGENT_PORT, () => {
   console.log(`\n🤖 TRACE Agent API → http://localhost:${AGENT_PORT}`);
@@ -388,20 +433,25 @@ agentApp.listen(AGENT_PORT, () => {
   console.log(`   GET  /agent/alerts   — coordinated fake alerts`);
   console.log(`   GET  /agent/sessions — scan history`);
   console.log(`   POST /agent/verify   — verify any image URL`);
-  console.log(`   GET  /agent/seen/:hash — check if hash in memory\n`);
+  console.log(`   GET  /agent/seen/:hash — check if hash in memory`);
+  console.log(`   GET  /agent/recall?q= — semantic search via MemWal\n`); // ← NEW
 });
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
-  console.log("\n╔══════════════════════════════════════════╗");
-  console.log("║     TRACE Verification Agent v2.0       ║");
-  console.log("║  Autonomous · Walrus-Powered · Persistent ║");
-  console.log("╚══════════════════════════════════════════╝\n");
+  console.log("\n╔══════════════════════════════════════════════╗");
+  console.log("║   TRACE Verification Agent v3 + MemWal      ║");
+  console.log("║  Autonomous · Walrus-Powered · Persistent    ║");
+  console.log("╚══════════════════════════════════════════════╝\n");
 
-  // Load memory from Walrus if available
+  // MemWal health check ← NEW
+  const mw = await checkMemWalHealth();
+  console.log(`MemWal: ${mw.connected ? `✅ connected (${mw.version})` : "⚠ not configured — Walrus Core only"}`);
+
+  // Load memory from Walrus Core if available
   let memory = loadLocal();
   if (memory.walrus_blob_id) {
-    console.log("📥 Restoring memory from Walrus...");
+    console.log("📥 Restoring memory from Walrus Core...");
     const walrusMem = await loadFromWalrus(memory.walrus_blob_id);
     if (walrusMem) {
       memory = walrusMem;
@@ -411,11 +461,10 @@ async function main() {
     console.log("🆕 Starting fresh — no previous Walrus memory found\n");
   }
 
-  // Run immediately then on interval
   await runScanSession(memory);
 
   setInterval(async () => {
-    const freshMemory = loadLocal(); // reload in case of external updates
+    const freshMemory = loadLocal();
     await runScanSession(freshMemory);
   }, SCAN_INTERVAL_MS);
 }

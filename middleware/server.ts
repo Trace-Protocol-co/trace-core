@@ -657,24 +657,23 @@ function loadAgentMemory() {
 
 app.get("/agent/status", (_req: Request, res: Response) => {
   const m = loadAgentMemory();
-  if (!m) return res.json({
-    status: "offline",
-    message: "Agent not running. Start with: npm run agent",
-  });
+  // Always return a valid response — agent is "ready" even if no scans yet
   res.json({
-    status:           "active",
-    version:          m.version ?? "2.0",
-    total_scanned:    m.total_scanned    ?? 0,
-    total_verified:   m.total_verified   ?? 0,
-    total_modified:   m.total_modified   ?? 0,
-    total_unverified: m.total_unverified ?? 0,
-    total_ai:         m.total_ai         ?? 0,
-    sessions_run:     m.sessions?.length ?? 0,
-    active_alerts:    m.alerts?.repeated_fakes?.length ?? 0,
-    walrus_memory:    m.walrus_blob_id ? `${WALRUS_AGG_URL}/v1/${m.walrus_blob_id}` : null,
-    walrus_blob_id:   m.walrus_blob_id ?? null,
-    last_session:     m.sessions?.[m.sessions.length - 1] ?? null,
-    last_saved:       m.last_saved ?? null,
+    status:           m ? "active" : "ready",
+    version:          m?.version ?? "2.0",
+    total_scanned:    m?.total_scanned    ?? 0,
+    total_verified:   m?.total_verified   ?? 0,
+    total_modified:   m?.total_modified   ?? 0,
+    total_unverified: m?.total_unverified ?? 0,
+    total_ai:         m?.total_ai         ?? 0,
+    sessions_run:     m?.sessions?.length ?? 0,
+    active_alerts:    m?.alerts?.repeated_fakes?.length ?? 0,
+    walrus_memory:    m?.walrus_blob_id ? `${WALRUS_AGG_URL}/v1/${m.walrus_blob_id}` : null,
+    walrus_blob_id:   m?.walrus_blob_id ?? null,
+    last_session:     m?.sessions?.[m.sessions.length - 1] ?? null,
+    last_saved:       m?.last_saved ?? null,
+    message:          m ? `Agent has scanned ${m.total_scanned} images across ${m.sessions?.length ?? 0} sessions` 
+                        : "Agent ready — use /agent/verify to start scanning",
   });
 });
 
@@ -694,51 +693,93 @@ app.get("/agent/alerts", (_req: Request, res: Response) => {
   });
 });
 
-app.get("/agent/sessions", (_req: Request, res: Response) => {
-  const m = loadAgentMemory();
-  if (!m) return res.json({ sessions: [], total: 0 });
-  res.json({ sessions: m.sessions ?? [], total: m.sessions?.length ?? 0 });
+app.get("/agent/recall", async (req: Request, res: Response) => {
+  const { q = "AI generated images", limit = "5" } = req.query as Record<string, string>;
+  // Import recall from memwal integration
+  try {
+    const { recallMemories } = await import("../agent/memwal-integration");
+    const results = await recallMemories(q, parseInt(limit));
+    res.json({ query: q, results, total: results.length, powered_by: "MemWal" });
+  } catch {
+    res.json({ query: q, results: [], total: 0, powered_by: "MemWal", error: "MemWal not configured" });
+  }
 });
+
+app.get("/agent/health", async (_req: Request, res: Response) => {
+  try {
+    const { checkMemWalHealth } = await import("../agent/memwal-integration");
+    const mw = await checkMemWalHealth();
+    res.json({ agent: "ok", memwal: mw, version: "3.0" });
+  } catch {
+    res.json({ agent: "ok", memwal: { connected: false }, version: "3.0" });
+  }
+});
+
+
 
 app.post("/agent/verify", express.json(), async (req: Request, res: Response) => {
   const { image_url, source } = req.body as { image_url: string; source?: string };
   if (!image_url) return res.status(400).json({ error: "image_url required" });
 
   try {
+    // Download the image
     const imgRes = await fetch(image_url, { signal: AbortSignal.timeout(10000) });
-    if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status}`);
+    if (!imgRes.ok) throw new Error(`Failed to fetch image: HTTP ${imgRes.status}`);
     const imgBuf = await imgRes.arrayBuffer();
+    const imgBytes = new Uint8Array(imgBuf);
 
-    const form = new FormData();
-    form.append("file", new Blob([imgBuf]), "image.jpg");
-    const verRes  = await fetch(`http://localhost:${process.env.PORT ?? "3001"}/v1/verify`, {
-      method: "POST", body: form,
-    });
-    const verData = await verRes.json() as { verdict: string; confidence: number };
+    // Compute SHA-256 hash
+    const hashBuf = await crypto.subtle.digest("SHA-256", imgBuf);
+    const hash    = Array.from(new Uint8Array(hashBuf))
+      .map(b => b.toString(16).padStart(2,"0")).join("");
+
+    // Check registry directly
+    const existing = await dbGetByHash(hash);
+    const verdict  = existing
+      ? ["VERIFIED_ORIGINAL","MODIFIED","UNVERIFIED","AI_GENERATED"][existing.integrity] ?? "UNKNOWN"
+      : "UNVERIFIED";
+    const confidence = existing ? 0.95 : 0.5;
 
     // Save to agent memory
     const m = loadAgentMemory() ?? {
       version: 2, walrus_blob_id: null, last_saved: new Date().toISOString(),
       total_scanned: 0, total_verified: 0, total_modified: 0,
-      total_unverified: 0, total_ai: 0, seen: {}, alerts: { repeated_fakes: [], coordinated_sharing: [] }, sessions: [],
+      total_unverified: 0, total_ai: 0, seen: {},
+      alerts: { repeated_fakes: [], coordinated_sharing: [] }, sessions: [],
     };
-
-    const hashBuf = await crypto.subtle.digest("SHA-256", imgBuf);
-    const hash    = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2,"0")).join("");
 
     m.seen[hash] = {
-      verdict: verData.verdict, confidence: verData.confidence,
-      first_seen: new Date().toISOString(), last_seen: new Date().toISOString(),
-      seen_count: 1, sources: [source ?? "api"], image_url,
+      verdict, confidence,
+      first_seen:  new Date().toISOString(),
+      last_seen:   new Date().toISOString(),
+      seen_count:  1,
+      sources:     [source ?? "api"],
+      image_url,
+      media_id:    existing?.mediaId,
     };
     m.total_scanned++;
+    if (verdict === "VERIFIED_ORIGINAL") m.total_verified++;
+    else if (verdict === "MODIFIED")     m.total_modified++;
+    else if (verdict === "AI_GENERATED") m.total_ai++;
+    else                                 m.total_unverified++;
+    m.last_saved = new Date().toISOString();
 
     const dir = agentPath.dirname(AGENT_MEM_FILE);
     if (!agentFs.existsSync(dir)) agentFs.mkdirSync(dir, { recursive: true });
     agentFs.writeFileSync(AGENT_MEM_FILE, JSON.stringify(m, null, 2));
 
-    res.json({ ...verData, walrus_memory: m.walrus_blob_id });
+    res.json({
+      verdict, confidence,
+      hash,
+      media_id:     existing?.mediaId ?? null,
+      in_registry:  !!existing,
+      walrus_memory: m.walrus_blob_id,
+      message:      existing
+        ? `Found in TRACE registry — ${verdict}`
+        : "Not in TRACE registry — image scanned and logged to agent memory",
+    });
   } catch (err: unknown) {
+    console.error("Agent verify error:", err);
     res.status(500).json({ error: err instanceof Error ? err.message : "Verification failed" });
   }
 });
