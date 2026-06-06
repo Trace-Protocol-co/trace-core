@@ -1,4 +1,5 @@
 import "dotenv/config";
+import rateLimit from "express-rate-limit";
 /**
  * TRACE — REST API Server v2
  * Endpoints: register, verify, media, graph, search, health,
@@ -62,6 +63,22 @@ app.use(express.json());
 
 // Initialize DB on startup
 dbInit().catch(console.error);
+
+// Rate limiting — protect gas wallet and prevent abuse
+app.use("/v1/register", rateLimit({
+  windowMs: 60 * 1000, max: 5,
+  message: { error: "Too many registrations. Max 5 per minute." },
+  standardHeaders: true, legacyHeaders: false,
+}));
+app.use("/v1/verify", rateLimit({
+  windowMs: 60 * 1000, max: 60,
+  message: { error: "Too many requests. Slow down." },
+  standardHeaders: true, legacyHeaders: false,
+}));
+app.use("/v1/search", rateLimit({
+  windowMs: 60 * 1000, max: 100,
+  standardHeaders: true, legacyHeaders: false,
+}));
 
 // In-memory staking and org records
 interface StakeRecord {
@@ -549,7 +566,54 @@ app.post("/v1/delegate", async (req: Request, res: Response) => {
 // GET /v1/health
 // ============================================================================
 
-app.get("/v1/health", async (_req: Request, res: Response) => {
+// ── AI Detection ─────────────────────────────────────────────────────────────
+app.post("/v1/detect-ai", upload.single("file"), async (req: Request, res: Response) => {
+  if (!req.file) return res.status(400).json({ error: "No file provided" });
+
+  const apiUser   = process.env.SIGHTENGINE_USER;
+  const apiSecret = process.env.SIGHTENGINE_SECRET;
+
+  if (!apiUser || !apiSecret) {
+    return res.json({ score: localAiEstimate(req.file.buffer), source: "local", signals: ["Local analysis only"] });
+  }
+
+  try {
+    const form = new FormData();
+    form.append("media", new Blob([req.file.buffer], { type: req.file.mimetype }), req.file.originalname);
+    form.append("models", "genai");
+    form.append("api_user", apiUser);
+    form.append("api_secret", apiSecret);
+
+    const response = await fetch("https://api.sightengine.com/1.0/check.json", { method: "POST", body: form });
+    const data = await response.json() as { status: string; type?: { ai_generated?: number } };
+
+    if (data.status === "success" && data.type?.ai_generated !== undefined) {
+      const score = Math.round(data.type.ai_generated * 10000);
+      return res.json({
+        score, source: "sightengine",
+        signals: [`Sightengine: ${(data.type.ai_generated * 100).toFixed(1)}% AI probability`],
+      });
+    }
+    throw new Error("Bad response");
+  } catch {
+    return res.json({ score: localAiEstimate(req.file.buffer), source: "local_fallback", signals: ["API error — local fallback"] });
+  }
+});
+
+function localAiEstimate(buf: Buffer): number {
+  const bytes = new Uint8Array(buf);
+  const freq  = new Array(256).fill(0);
+  const len   = Math.min(bytes.length, 65536);
+  for (let i = 0; i < len; i++) freq[bytes[i]]++;
+  let entropy = 0;
+  freq.forEach(f => { if (f > 0) { const p = f / len; entropy -= p * Math.log2(p); } });
+  const n = entropy / 8.0;
+  if (n > 0.975) return Math.min(10000, Math.round((n - 0.975) * 80000));
+  if (n > 0.96)  return Math.round((n - 0.96) * 40000);
+  return 0;
+}
+
+// ── Health ────────────────────────────────────────────────────────────────────
   res.json({
     status: "ok",
     registered: await dbCount(),
