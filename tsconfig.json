@@ -2,6 +2,7 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "commonjs",
+    "moduleResolution": "bundler",
     "lib": ["ES2022"],
     "outDir": "./dist",
     "rootDir": ".",
@@ -12,8 +13,9 @@
     "resolveJsonModule": true,
     "declaration": false,
     "sourceMap": false,
-    "noImplicitAny": false
+    "noImplicitAny": false,
+    "allowImportingTsExtensions": false
   },
-  "include": ["middleware/**/*", "scripts/**/*"],
+  "include": ["middleware/**/*", "agent/**/*", "scripts/**/*"],
   "exclude": ["node_modules", "dist", "move", "frontend"]
 }
