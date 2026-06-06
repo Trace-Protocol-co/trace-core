@@ -640,7 +640,110 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 // Start
 // ============================================================================
 
-const PORT = parseInt(process.env.PORT ?? "3001", 10);
+// ── Agent endpoints — integrated so they run on same port as API ──────────────
+import * as agentFs from "fs";
+import * as agentPath from "path";
+
+const AGENT_MEM_FILE  = agentPath.join(process.cwd(), "agent", "memory.json");
+const WALRUS_AGG_URL  = process.env.WALRUS_AGGREGATOR ?? "https://aggregator.walrus-testnet.walrus.space";
+
+function loadAgentMemory() {
+  try {
+    if (agentFs.existsSync(AGENT_MEM_FILE))
+      return JSON.parse(agentFs.readFileSync(AGENT_MEM_FILE, "utf8"));
+  } catch { /* ignore */ }
+  return null;
+}
+
+app.get("/agent/status", (_req: Request, res: Response) => {
+  const m = loadAgentMemory();
+  if (!m) return res.json({
+    status: "offline",
+    message: "Agent not running. Start with: npm run agent",
+  });
+  res.json({
+    status:           "active",
+    version:          m.version ?? "2.0",
+    total_scanned:    m.total_scanned    ?? 0,
+    total_verified:   m.total_verified   ?? 0,
+    total_modified:   m.total_modified   ?? 0,
+    total_unverified: m.total_unverified ?? 0,
+    total_ai:         m.total_ai         ?? 0,
+    sessions_run:     m.sessions?.length ?? 0,
+    active_alerts:    m.alerts?.repeated_fakes?.length ?? 0,
+    walrus_memory:    m.walrus_blob_id ? `${WALRUS_AGG_URL}/v1/${m.walrus_blob_id}` : null,
+    walrus_blob_id:   m.walrus_blob_id ?? null,
+    last_session:     m.sessions?.[m.sessions.length - 1] ?? null,
+    last_saved:       m.last_saved ?? null,
+  });
+});
+
+app.get("/agent/memory", (_req: Request, res: Response) => {
+  const m = loadAgentMemory();
+  if (!m) return res.status(404).json({ error: "No agent memory found" });
+  res.json(m);
+});
+
+app.get("/agent/alerts", (_req: Request, res: Response) => {
+  const m = loadAgentMemory();
+  if (!m) return res.json({ repeated_fakes: [], coordinated_sharing: [], total_alerts: 0 });
+  res.json({
+    repeated_fakes:      m.alerts?.repeated_fakes      ?? [],
+    coordinated_sharing: m.alerts?.coordinated_sharing ?? [],
+    total_alerts:        m.alerts?.repeated_fakes?.length ?? 0,
+  });
+});
+
+app.get("/agent/sessions", (_req: Request, res: Response) => {
+  const m = loadAgentMemory();
+  if (!m) return res.json({ sessions: [], total: 0 });
+  res.json({ sessions: m.sessions ?? [], total: m.sessions?.length ?? 0 });
+});
+
+app.post("/agent/verify", express.json(), async (req: Request, res: Response) => {
+  const { image_url, source } = req.body as { image_url: string; source?: string };
+  if (!image_url) return res.status(400).json({ error: "image_url required" });
+
+  try {
+    const imgRes = await fetch(image_url, { signal: AbortSignal.timeout(10000) });
+    if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status}`);
+    const imgBuf = await imgRes.arrayBuffer();
+
+    const form = new FormData();
+    form.append("file", new Blob([imgBuf]), "image.jpg");
+    const verRes  = await fetch(`http://localhost:${process.env.PORT ?? 3001}/v1/verify`, {
+      method: "POST", body: form,
+    });
+    const verData = await verRes.json() as { verdict: string; confidence: number };
+
+    // Save to agent memory
+    const m = loadAgentMemory() ?? {
+      version: 2, walrus_blob_id: null, last_saved: new Date().toISOString(),
+      total_scanned: 0, total_verified: 0, total_modified: 0,
+      total_unverified: 0, total_ai: 0, seen: {}, alerts: { repeated_fakes: [], coordinated_sharing: [] }, sessions: [],
+    };
+
+    const hashBuf = await crypto.subtle.digest("SHA-256", imgBuf);
+    const hash    = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2,"0")).join("");
+
+    m.seen[hash] = {
+      verdict: verData.verdict, confidence: verData.confidence,
+      first_seen: new Date().toISOString(), last_seen: new Date().toISOString(),
+      seen_count: 1, sources: [source ?? "api"], image_url,
+    };
+    m.total_scanned++;
+
+    const dir = agentPath.dirname(AGENT_MEM_FILE);
+    if (!agentFs.existsSync(dir)) agentFs.mkdirSync(dir, { recursive: true });
+    agentFs.writeFileSync(AGENT_MEM_FILE, JSON.stringify(m, null, 2));
+
+    res.json({ ...verData, walrus_memory: m.walrus_blob_id });
+  } catch (err: unknown) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Verification failed" });
+  }
+});
+
+
 app.listen(PORT, () => {
   console.log(`[TRACE API] Listening on http://localhost:${PORT}`);
   console.log(`[TRACE API] Network:    ${CONFIG.SUI_NETWORK}`);
