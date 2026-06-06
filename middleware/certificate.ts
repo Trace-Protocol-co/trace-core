@@ -4,7 +4,7 @@
  */
 
 import QRCode from "qrcode";
-import { CONFIG } from "./traceProcessor";
+import { CONFIG } from "./traceProcessor.js";
 
 export interface CertificateData {
   mediaId: string;

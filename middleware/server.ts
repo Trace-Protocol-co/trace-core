@@ -24,13 +24,13 @@ import {
   buildRegisterOrgTx,
   buildDepositStakeTx,
   buildFilChallengeTx,
-} from "./traceProcessor";
-import { generateCertificateHTML, CertificateData } from "./certificate";
+} from "./traceProcessor.js";
+import { generateCertificateHTML, CertificateData } from "./certificate.js";
 import {
   dbInit, dbSave, dbGetByHash, dbGetById, dbList, dbCount,
   dbGetMemRegistry, dbGetMemRegistryById,
   type RegistryEntry,
-} from "./db";
+} from "./db.js";
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });

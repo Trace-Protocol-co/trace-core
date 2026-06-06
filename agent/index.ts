@@ -22,7 +22,7 @@ import {
   recallMemories,
   checkMemWalHealth,
   getMemWalClient,
-} from "./memwal-integration";
+} from "./memwal-integration.js";
 
 const TRACE_API        = process.env.TRACE_API_URL    ?? "https://trace-cbvb.onrender.com";
 const WALRUS_PUB       = process.env.WALRUS_PUBLISHER  ?? "https://publisher.walrus-testnet.walrus.space";
