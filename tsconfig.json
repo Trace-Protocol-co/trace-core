@@ -13,9 +13,7 @@
     "resolveJsonModule": true,
     "declaration": false,
     "sourceMap": false,
-    "noImplicitAny": false,
-    "allowImportingTsExtensions": true,
-    "noEmit": false
+    "noImplicitAny": false
   },
   "include": ["middleware/**/*", "agent/**/*", "scripts/**/*"],
   "exclude": ["node_modules", "dist", "move", "frontend"]
