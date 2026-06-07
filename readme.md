@@ -1,340 +1,443 @@
 # TRACE Protocol
-
-> **"HTTPS for Media"** — Decentralized cryptographic provenance infrastructure built on Sui + Walrus.
+> **The Authenticity Layer for the Internet — "HTTPS for Media"**
 
 [![Live](https://img.shields.io/badge/Live-traceprotocol.co-10b981)](https://www.traceprotocol.co)
-[![API](https://img.shields.io/badge/API-Render-3b82f6)](https://trace-cbvb.onrender.com/v1/health)
-[![Tests](https://img.shields.io/badge/Move%20Tests-19%2F19-10b981)](./move)
+[![API](https://img.shields.io/badge/API-Live-3b82f6)](https://trace-cbvb.onrender.com/v1/health)
+[![Bank](https://img.shields.io/badge/Memory%20Bank-Live-8b5cf6)](https://www.traceprotocol.co/bank)
+[![Tests](https://img.shields.io/badge/Move%20Tests-29%2F29-10b981)](./move)
 [![Network](https://img.shields.io/badge/Network-Sui%20Testnet-6fbcf0)](https://suiexplorer.com)
+[![Walrus](https://img.shields.io/badge/Storage-Walrus-ff6b35)](https://walrus.xyz)
+[![MemWal](https://img.shields.io/badge/Memory-MemWal-3b82f6)](https://github.com/MystenLabs/memwal)
+[![Seal](https://img.shields.io/badge/Privacy-Seal-ec4899)](https://seal.mystenlabs.com)
 
 ---
 
-## Problem
+## What TRACE Is
 
-**3.5 billion images** are shared online every day. Deepfakes increased **900% in 2023**. By 2026 synthetic media will be indistinguishable to the human eye. There is no open, decentralised way to answer:
+TRACE is a decentralized media authenticity system built on two complementary layers:
 
-> *"Who created this media, when, and has it been modified?"*
+| Layer | What It Does | Technology |
+|-------|-------------|------------|
+| **Provenance Protocol** | Cryptographically binds any media to its origin, timestamp, and integrity history — permanently on-chain | Sui + Walrus |
+| **Collective Memory Bank** | A persistent, decentralized, growing public record of every piece of media encountered by every TRACE agent — accumulated across sessions, devices, and geographies | MemWal on Walrus |
 
-Adobe's C2PA standard exists but is **centralized** — companies can alter or revoke records. TRACE anchors provenance on **Sui blockchain**: immutable, permissionless, and verifiable by anyone forever.
+Together: **TRACE knows both what is authentic and what has been seen.**
 
----
-
-## What TRACE Does
-
-TRACE is a four-layer protocol:
-
-```
-Layer 1 — REGISTRATION      Anchor media hash + metadata on Sui blockchain
-Layer 2 — VERIFICATION      Anyone can verify any file against the registry (free)
-Layer 3 — PROVENANCE        Full edit chain graph — who modified what and when
-Layer 4 — ECONOMICS         Staking to prevent backdated timestamp fraud
-```
-
-### Features
-
-| # | Feature | Description |
-|---|---------|-------------|
-| F-1 | **Media Registration** | SHA-256 + pHash + device signature anchored on Sui. Blob stored on Walrus. |
-| F-2 | **Provenance Graph** | Directed acyclic graph of all edits and derivatives, fully on-chain. |
-| F-3 | **Verification** | Upload any file → get verdict: VERIFIED / MODIFIED / NOT IN REGISTRY / AI GENERATED |
-| F-4 | **Browser Extension** | Auto-scans every image on every webpage. Trust badges. Chrome MV3. |
-| F-5 | **Certificates** | Auto-generated HTML certificate with QR code per registration. |
-| F-6 | **Delegation** | Newsrooms delegate signing authority to reporters. OrgRoot → DelegationRecord. |
-| F-7 | **zkLogin** | No crypto wallet needed. Journalists sign in with Google. Gas sponsored by TRACE. |
-| F-8 | **Temporal Staking** | Stake SUI to claim old timestamps. 7-day challenge window. Fraud is expensive. |
+> HTTPS works because of three components: the protocol, the certificate authority, and the browser trust store.
+> TRACE works the same way: the Provenance Protocol, the Sui/Walrus Registry, and the Collective Memory Bank.
+> Without the bank, every agent starts from zero. With it, the system compounds.
 
 ---
 
-## Architecture
+## The Four Failures TRACE Fixes
 
+| Failure | Consequence | TRACE Solution |
+|---------|------------|----------------|
+| No Origin Guarantee | Anyone can claim authorship of anything | SHA-256 + device signature anchored on Sui |
+| No Integrity Guarantee | Tampered content is indistinguishable from originals | pHash similarity detection + immutable Walrus blobs |
+| No Timeline Guarantee | Impossible to prove what existed before what | `sui::clock` consensus-anchored timestamps |
+| No Collective Memory | Each verification runs from scratch. Spread patterns invisible. The internet forgets everything. | MemWal Collective Memory Bank on Walrus |
+
+---
+
+## Live Deployment
+
+| Component | URL |
+|-----------|-----|
+| Frontend | https://www.traceprotocol.co |
+| Backend API | https://trace-cbvb.onrender.com |
+| Memory Bank Dashboard | https://www.traceprotocol.co/bank |
+| Sui Explorer | https://suiexplorer.com/object/0xf1acdf7d36c4816d91ebe39f0887f163155a08bb0d435e7ea8f737b981637bdb?network=testnet |
+
+**Contracts (Sui Testnet):**
 ```
-                    PRODUCERS                           CONSUMERS
-              (Journalists, Creators)              (Anyone on the internet)
-                       │                                     │
-               Sign in with Google                    No sign-in needed
-               (zkLogin — no wallet)                  Free, instant reads
-                       │                                     │
-              ┌────────▼─────────────────────────────▼───────┐
-              │          TRACE Backend (Node.js + Express)    │
-              │                                               │
-              │  • SHA-256 hash computation                   │
-              │  • Perceptual hash (pHash)                    │
-              │  • AI score estimation                        │
-              │  • Walrus blob upload                         │
-              │  • Sui transaction builder + broadcaster      │
-              │  • PostgreSQL registry (persistent)           │
-              └────────┬─────────────────────────┬───────────┘
-                       │                         │
-              ┌────────▼────────┐    ┌───────────▼──────────┐
-              │  Walrus Storage │    │     Sui Testnet       │
-              │  (blobs)        │    │                       │
-              │  Decentralised  │    │  MediaRecord (obj)    │
-              │  Censorship-    │    │  EditRecord (obj)     │
-              │  resistant      │    │  OrgRoot (obj)        │
-              └─────────────────┘    │  DelegationRecord     │
-                                     │  StakeDeposit         │
-                                     │  Treasury (shared)    │
-                                     └──────────────────────┘
+Package ID:        0xf1acdf7d36c4816d91ebe39f0887f163155a08bb0d435e7ea8f737b981637bdb
+Treasury ID:       0xc8297d27fe04379529cae44e58c7980224dba603e022d8822ad9e832a481c20c
+BankAccessPolicy:  0x1b2343c3b4ffbf25ca5c290777c95874e1ab2ea18d8f954ff9769d3c97c29dc4
+Deploy TX:         8UkQ4NFnhyyGaBjRXKwRTa35S2DweoUco3VaF7aUbf67
+Modules:           media · delegation · staking · seal_policy
 ```
 
 ---
 
-## Smart Contracts
+## Stack
 
-**Network:** Sui Testnet  
-**Package:** `0x3eff0f24ece1bd96bef48ba534eb498331a87cb1fb90d30de5bf1ec940cc648e`  
-**Treasury:** `0x5dcd795b9b23e0344608b92d58f2a0c0438558243ce5db9c821292f90df9a54a`  
-**Deployment TX:** `7YKKSowaBdkDWHPL1xtVYao4YzXbtcqvHbJrpL82N5YQ`
-
-### Module: `media.move`
-Core provenance. Every registered file creates a `MediaRecord` object on Sui.
-
-**MediaRecord fields:**
-- `blob_id` — Walrus blob reference
-- `content_hash` — SHA-256 of raw bytes (exact integrity proof)
-- `perceptual_hash` — pHash for similarity detection across re-encodes
-- `device_signature` — cryptographic proof of capture device identity
-- `creator` — wallet address (or zkLogin identity)
-- `timestamp` — `sui::clock::Clock` value (consensus-anchored, unforgeable)
-- `walrus_cert` — Walrus storage certificate
-- `gps` — optional, user-controlled capture location
-- `ai_score` — AI generation probability at registration time (0–10,000 basis points)
-- `parent` — `Option<ID>` — null for originals, parent `MediaRecord` ID for derivatives
-- `edit_type` — enum: ORIGINAL / TRIM / COLOR_GRADE / SUBTITLE / AI_REMIX / CROP / MERGE / TRANSLATE
-- `integrity` — enum: ORIGINAL / MODIFIED / UNVERIFIED / AI_GENERATED
-- `revoked` — bool
-
-### Module: `delegation.move`
-Organisation → reporter trust hierarchy.
-
-**Why it's needed:** BBC has 500 journalists. Each needs to sign media under the BBC brand. Without delegation, anyone could claim to be BBC. Delegation solves this:
-- BBC creates one `OrgRoot` object (owns it)
-- Issues `DelegationRecord` objects to each journalist
-- Content signed by a journalist is traceable to BBC's root
-- If a journalist leaves, BBC revokes their delegation — future registrations blocked, past content stays valid
-
-### Module: `staking.move`
-Anti-backdating economic mechanism.
-
-**Why it's needed:** Without staking, anyone could register a deepfake today but claim the timestamp was 5 years ago ("this photo is from 2019"). Staking makes this expensive:
-- 72h free window — no stake for recent media
-- Beyond 72h: 50 SUI per extra day of claimed backdating
-- 7-day challenge window — anyone can dispute with evidence
-- Successful challenge: 70% of stake to challenger, 30% to Treasury
-- Result: false timestamp claims are economically irrational
-
-**Shared Treasury:** Accumulates protocol fees from slashed stakes.
-
-### Test Results
 ```
-sui move test
-Running Move unit tests
-[ PASS ] trace::media_tests::test_ai_integrity_boundary
-[ PASS ] trace::media_tests::test_ai_score_overflow_blocked
-[ PASS ] trace::media_tests::test_authorized_revocation
-[ PASS ] trace::media_tests::test_clean_lifecycle
-[ PASS ] trace::media_tests::test_derivative_without_parent_blocked
-[ PASS ] trace::media_tests::test_double_revocation_blocked
-[ PASS ] trace::media_tests::test_edit_on_revoked_parent_blocked
-[ PASS ] trace::media_tests::test_revocation_unauthorized_attack
-[ PASS ] trace::delegation_tests::test_double_revocation_blocked
-[ PASS ] trace::delegation_tests::test_org_register_and_grant
-[ PASS ] trace::delegation_tests::test_revocation_flow
-[ PASS ] trace::delegation_tests::test_self_delegation_blocked
-[ PASS ] trace::delegation_tests::test_unauthorized_grant_blocked
-[ PASS ] trace::staking_tests::test_cannot_challenge_after_window
-[ PASS ] trace::staking_tests::test_cannot_release_if_challenged
-[ PASS ] trace::staking_tests::test_challenge_flow
-[ PASS ] trace::staking_tests::test_deposit_and_release
-[ PASS ] trace::staking_tests::test_required_stake_calculation
-[ PASS ] trace::staking_tests::test_stake_not_required_for_recent
-Test result: OK. Total tests: 19; passed: 19; failed: 0
+Sui         — smart contracts, object model, zkLogin, sponsored transactions
+Walrus      — decentralized blob storage for media files and bank entries
+MemWal      — persistent agent memory layer (Collective Memory Bank)
+Seal        — privacy-preserving anonymization of sighting records
 ```
 
 ---
 
-## API Reference
+## Architecture — Three Layers
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  OBSERVATION LAYER — Collective Memory Bank                  │
+│  MemWal on Walrus                                            │
+│  Every agent encounter → anonymized sighting record         │
+│  Grows passively with every page load, every verification   │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────────┐
+│  PROVENANCE LAYER — TRACE On-Chain Registry                  │
+│  Sui + Walrus                                                │
+│  Deliberately registered MediaRecord objects                │
+│  Cryptographic hashes · Walrus blobs · Creator identity     │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────────┐
+│  INTELLIGENCE LAYER — Multi-Agent System                     │
+│  6 specialized agents reading from both layers               │
+│  Verification · Sentinel · Spread · Anomaly · Evidence · Research │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Verification Pipeline (F-3)
+
+Every verification runs all 6 steps. Every step contributes to the bank.
+
+```
+Input: any media file
+  ↓
+Step 1: SHA-256 → exact registry match on Sui?
+  YES → return MediaRecord + provenance chain + write sighting
+  NO  → continue
+  ↓
+Step 2: Query Collective Memory Bank (MemWal)
+  KNOWN → return sighting history + spread timeline + first-seen timestamp
+  NEW   → continue (first encounter — will be recorded)
+  ↓
+Step 3: pHash similarity > 90%?
+  YES → return MODIFIED verdict + parent media
+  NO  → continue
+  ↓
+Step 4: AI generation detection (Sightengine + entropy analysis)
+  ↓
+Step 5: Write sighting to MemWal (ALWAYS — regardless of verdict)
+  ↓
+Step 6: Return verdict + bank contribution confirmation + Walrus blob ID
+```
+
+**Every verification grows the bank. The bank never forgets.**
+
+---
+
+## Smart Contracts — 4 Modules, 29/29 Tests
+
+### `media.move` — Core Provenance
+```move
+public struct MediaRecord has key, store {
+    id:               UID,
+    blob_id:          String,         // Walrus blob reference
+    content_hash:     vector<u8>,     // SHA-256 exact integrity
+    perceptual_hash:  vector<u8>,     // pHash similarity detection
+    creator:          address,        // zkLogin identity
+    timestamp:        u64,            // sui::clock consensus-anchored
+    ai_score:         u16,            // Synthetic probability 0-10000
+    integrity:        u8,             // ORIGINAL|MODIFIED|UNVERIFIED|AI_GENERATED
+    revoked:          bool,
+}
+```
+
+### `delegation.move` — Organisation Trust
+Newsrooms delegate signing authority to reporters. Content signed by a reporter inherits the organisation's verification. Revocation does not invalidate prior content.
+
+### `staking.move` — Anti-Backdating Economics
+Claiming timestamps older than 72 hours requires staking 50 SUI per 24-hour period. Successful challenge: 70% to challenger, 30% to Treasury. Makes timestamp fraud economically irrational. **Bank provides independent evidence** — if the bank shows prior sightings before a claimed creation date, the challenge succeeds automatically.
+
+### `seal_policy.move` — Privacy Layer (NEW)
+On-chain access control for Seal encryption of sighting records. `seal_approve()` called by Seal key servers to authorize decryption. Tiered access: PUBLIC (aggregate stats) → VERIFIER (individual sightings) → INSTITUTIONAL (full bank query).
+
+```move
+public fun seal_approve(
+    credential: &VerifierCredential,
+    _id:        vector<u8>,
+    ctx:        &TxContext,
+) {
+    assert!(!credential.revoked, ENotAuthorized);
+    assert!(credential.holder == ctx.sender(), ENotAuthorized);
+    // Authorized — Seal key server releases decryption key
+}
+```
+
+---
+
+## Collective Memory Bank (F-9)
+
+The bank is the fourth failure fixed. Stored in MemWal on Walrus.
+
+### Sighting Record Schema
+```json
+{
+  "sighting_id": "sight_ace533324c759f5c",
+  "media_fingerprint": {
+    "content_hash": "ad86f022c693...",
+    "perceptual_hash": "f8f0e0c080808080",
+    "media_type": "image"
+  },
+  "first_seen": {
+    "timestamp": "2026-06-07T19:46:34Z",
+    "platform": "web",
+    "agent_verdict_at_encounter": "UNVERIFIED"
+  },
+  "trace_registry_status": {
+    "registered": false,
+    "registration_delta_hours": null
+  },
+  "contributed_by": "agent_anonymous_hash_xyz",
+  "bank_blob_id": "AL3JP64JcZ1itHlzdzBNqhjo3SQYBHthFSv4jNjw-tw"
+}
+```
+
+### What the Bank Reveals
+- **First appearance** — when and where media was first seen, regardless of registration
+- **Spread timeline** — how media traveled across platforms over time
+- **Registration lag** — gap between first sighting and TRACE registration (large gaps are suspicious)
+- **Coordinated behavior** — statistically abnormal simultaneous appearance across sources
+- **Variant detection** — similar pHash across multiple hashes shows mutation as media spreads
+
+### Verifying MemWal Integration
+```bash
+# 1. Confirm connection
+curl https://trace-cbvb.onrender.com/agent/health
+# → {"memwal":{"connected":true,"status":"ok","version":"0.1.0"}}
+
+# 2. Verify an image — bank contribution confirmed
+curl -X POST https://trace-cbvb.onrender.com/v1/verify -F "file=@image.jpg"
+# → {"bank":{"contributed_to_bank":true,"bank_blob_id":"AL3JP64..."}}
+
+# 3. Semantic recall — MemWal retrieves by meaning not keyword
+curl "https://trace-cbvb.onrender.com/agent/recall?q=unverified+images&limit=5"
+# → Real sighting records retrieved semantically
+
+# 4. Bank dashboard
+open https://www.traceprotocol.co/bank
+```
+
+---
+
+## Multi-Agent System (F-10)
+
+All 6 agents share one MemWal store. Adding a new agent requires no new data collection.
+
+| Agent | Endpoint | Output |
+|-------|----------|--------|
+| Verification | `POST /v1/verify` | Real-time verdict drawing from both provenance and bank |
+| Sentinel | `POST /agent/sentinel` | Derivative detection — updates graph with AI_AUTONOMOUS nodes |
+| Spread Analysis | `GET /agent/spread/:hash` | Complete spread timeline — first appearance, platform path, mutation history |
+| Anomaly Detection | `GET /agent/anomaly` | Coordinated inauthentic behavior alerts |
+| Source Trust | `GET /agent/source-trust/:source` | Source track record — verified vs unverified by topic |
+| Legal Evidence | `GET /agent/evidence/:id` | Court-formatted package stored as Walrus artifact |
+| Research | `GET /agent/research` | Aggregate pattern analysis — academic-grade reports |
+
+### Legal Evidence Agent Example
+```bash
+curl https://trace-cbvb.onrender.com/agent/evidence/0xefd1ccba...
+```
+```json
+{
+  "case_reference": "TRACE-EVIDENCE-0XEFD1CC",
+  "chain_of_custody": {
+    "registered_on_blockchain": true,
+    "blockchain": "Sui Testnet",
+    "immutable": true,
+    "tamper_evident": true
+  },
+  "admissibility_notes": [
+    "SHA-256 hash anchored on Sui blockchain — tamper-proof",
+    "Consensus-anchored timestamp via sui::clock",
+    "Walrus blob certificate provides storage proof",
+    "Collective Memory Bank corroborates timeline"
+  ]
+}
+```
+
+---
+
+## C2PA Compatibility
+
+Every registered media exports a C2PA-compatible manifest — interoperable with Adobe, Google, Microsoft, and BBC tooling.
+
+```bash
+curl https://trace-cbvb.onrender.com/v1/media/:id/c2pa
+```
+```json
+{
+  "@context": "https://c2pa.org/assertions/v1",
+  "claim_generator": "TRACE Protocol/2.0",
+  "assertions": [
+    { "label": "c2pa.actions" },
+    { "label": "stds.schema-org.CreativeWork" },
+    { "label": "trace.provenance" }
+  ]
+}
+```
+
+---
+
+## Full API Reference
 
 **Base URL:** `https://trace-cbvb.onrender.com`
 
-### Public (no auth)
+All read/verify endpoints are **free, no authentication, no API key.**
+
+### Provenance
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/v1/health` | Server status, registry count, network |
-| `POST` | `/v1/verify` | Verify any media file — returns verdict + provenance |
-| `GET` | `/v1/media/:id` | Get MediaRecord by Sui object ID |
-| `GET` | `/v1/media/:id/graph` | Get full provenance DAG |
-| `GET` | `/v1/media/:id/certificate` | HTML certificate with QR code |
-| `GET` | `/v1/explorer` | Browse registry (filterable, paginated) |
-| `GET` | `/v1/search?hash=` | Search by SHA-256 or pHash similarity |
+| `POST` | `/v1/verify` | Verify any media — 6-step pipeline + bank contribution |
+| `GET` | `/v1/media/:id` | Full MediaRecord |
+| `GET` | `/v1/media/:id/graph` | Provenance DAG |
+| `GET` | `/v1/media/:id/certificate` | Legal-grade HTML certificate with bank summary |
+| `GET` | `/v1/media/:id/c2pa` | C2PA-compatible manifest |
+| `GET` | `/v1/explorer` | Browse registry |
+| `GET` | `/v1/health` | Health + stats |
 
-### Authenticated (Google zkLogin required)
+### Collective Memory Bank
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/v1/register` | Register media on-chain (gas sponsored by TRACE) |
-| `POST` | `/v1/stake` | Deposit stake for backdated timestamp claim |
-| `POST` | `/v1/challenge` | File challenge against a stake deposit |
-| `POST` | `/v1/org` | Register an organisation root |
-| `POST` | `/v1/delegate` | Grant delegation to a sub-wallet |
+| `GET` | `/v1/bank/stats` | Aggregate bank statistics |
+| `GET` | `/v1/bank/top-sighted` | Top media ranked by encounter count |
+| `GET` | `/v1/bank/alerts` | Active anomaly alerts |
 
-### Example: Verify a file
-```javascript
-const fd = new FormData();
-fd.append("file", mediaFile);
+### Agents
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/agent/sentinel` | Derivative detection for registered media |
+| `GET` | `/agent/spread/:hash` | Full spread timeline |
+| `GET` | `/agent/anomaly` | Coordinated inauthentic behavior |
+| `GET` | `/agent/source-trust/:source` | Source trust profile |
+| `GET` | `/agent/evidence/:id` | Court-formatted evidence package |
+| `GET` | `/agent/research` | Aggregate pattern report |
+| `GET` | `/agent/recall?q=` | Semantic memory search via MemWal |
+| `GET` | `/agent/health` | MemWal connection status |
 
-const res = await fetch("https://trace-cbvb.onrender.com/v1/verify", {
-  method: "POST", body: fd
-});
-const result = await res.json();
-// result.verdict: "VERIFIED_ORIGINAL" | "MODIFIED" | "UNVERIFIED" | "AI_GENERATED"
-// result.confidence: 0.94
-// result.origin.creator: "0x7a9f...c4d2"
-// result.origin.sui_tx: "AkqZFLH..."
-// result.provenance_chain: [{ node, integrity, timestamp }]
-```
+---
+
+## Browser Extension
+
+Chrome MV3 extension. Install from `/trace-extension` folder.
+
+**Badge states:** 🟢 VERIFIED ORIGINAL · 🟡 MODIFIED · 🔴 UNVERIFIED · 🟣 AI GENERATED · ⚪ UNKNOWN
+
+**Hover panel (320px):** verdict · confidence · bank sighting count · first-seen timestamp · spread velocity · provenance chain depth · MemWal pulse indicator
+
+**Memory contexts per PRD:**
+- Personal memory — every encounter this agent has seen
+- Collective bank — anonymized sightings shared globally via MemWal
 
 ---
 
 ## Local Development
 
-### Prerequisites
-- Node.js 20+
-- Sui CLI (`cargo install --locked --git https://github.com/MystenLabs/sui.git sui`)
-
-### Backend
 ```bash
-cd trace
-npm install
+# Backend
+git clone https://github.com/anjolagithub/trace
+cd trace && npm install
 cp .env.example .env
-# Fill in TRACE_PRIVATE_KEY, TRACE_PACKAGE_ID
-npm run dev
-# Server at http://localhost:3001
-```
+npm run dev           # http://localhost:3001
 
-### Frontend
-```bash
-cd trace-frontend
-npm install
-# Create .env.local:
+# Frontend
+cd trace-frontend && npm install
 echo "VITE_API_URL=http://localhost:3001" > .env.local
-echo "VITE_APP_URL=http://localhost:5173" >> .env.local
-npm run dev
-# App at http://localhost:5173
-```
+npm run dev           # http://localhost:5173
 
-### Move Contracts
-```bash
+# Contracts
 cd trace/move
-sui move build
-sui move test
-# Deploy:
-sui client publish --gas-budget 300000000
+sui move test         # 29/29 passing
+sui client publish --gas-budget 500000000
+
+# Extension
+# chrome://extensions → Developer mode → Load unpacked → trace-extension/
 ```
 
-### Browser Extension
-```bash
-# Load in Chrome:
-# 1. chrome://extensions → enable Developer mode
-# 2. Load unpacked → select trace-extension/ folder
-```
-
----
-
-## Environment Variables
-
-### Backend
+### Environment Variables
 ```env
-TRACE_PACKAGE_ID=0x3eff0f24ece1bd96bef48ba534eb498331a87cb1fb90d30de5bf1ec940cc648e
-TRACE_TREASURY_ID=0x5dcd795b9b23e0344608b92d58f2a0c0438558243ce5db9c821292f90df9a54a
-TRACE_PRIVATE_KEY=<sui_private_key_hex>
-DATABASE_URL=<postgresql_connection_string>    # optional — uses file fallback if not set
-ALLOWED_ORIGINS=https://www.traceprotocol.co,http://localhost:5173
-APP_URL=https://www.traceprotocol.co
+# Backend (Render)
+TRACE_PACKAGE_ID=0xf1acdf7d36c4816d91ebe39f0887f163155a08bb0d435e7ea8f737b981637bdb
+TRACE_TREASURY_ID=0xc8297d27fe04379529cae44e58c7980224dba603e022d8822ad9e832a481c20c
+TRACE_SEAL_POLICY_ID=0x1b2343c3b4ffbf25ca5c290777c95874e1ab2ea18d8f954ff9769d3c97c29dc4
+TRACE_PRIVATE_KEY=<sui_private_key>
+MEMWAL_PRIVATE_KEY=<memwal_delegate_key>
+MEMWAL_ACCOUNT_ID=0x89607402e323e56b5b9f0b941e40029c5965c62486a1ed14139dc322eea090a8
+DATABASE_URL=<postgresql_url>
 WALRUS_PUBLISHER=https://publisher.walrus-testnet.walrus.space
 WALRUS_AGGREGATOR=https://aggregator.walrus-testnet.walrus.space
-NODE_ENV=production
+SIGHTENGINE_USER=<key>
+SIGHTENGINE_SECRET=<key>
 ```
-
-### Frontend
-```env
-VITE_API_URL=https://trace-cbvb.onrender.com
-VITE_APP_URL=https://www.traceprotocol.co
-VITE_GOOGLE_CLIENT_ID=<google_oauth_client_id>
-```
-
----
-
-## Mainnet Deployment
-
-### What changes
-| Item | Change |
-|------|--------|
-| Contract | `sui client switch --env mainnet` → republish → update package ID |
-| Walrus | Switch to `publisher.walrus.space` / `aggregator.walrus.space` |
-| Database | Add PostgreSQL on Render (free tier available) |
-| Google OAuth | Submit app for production verification (3-5 days) |
-| Gas wallet | Fund server keypair with mainnet SUI |
-
-### Add PostgreSQL on Render
-1. Render dashboard → New → PostgreSQL
-2. Copy `Internal Database URL`
-3. Add as `DATABASE_URL` env var on your web service
-4. `db.ts` auto-creates the schema on first boot
-
-### Redeploy contracts to mainnet
-```bash
-sui client switch --env mainnet
-cd trace/move
-sui client publish --gas-budget 500000000
-# Update TRACE_PACKAGE_ID and TRACE_TREASURY_ID in Render env vars
-```
-
----
-
-## Why Sui + Walrus
-
-| Requirement | Solution |
-|-------------|----------|
-| Sub-second finality | Sui's ~400ms — registration feels instant |
-| Cheap transactions | ~$0.001 per MediaRecord |
-| No wallet for journalists | Sui zkLogin (Google sign-in) |
-| Rich on-chain objects | Sui object model + Display standard |
-| Decentralised media storage | Walrus erasure-coded blobs |
-| Unforgeable timestamps | `sui::clock::Clock` consensus time |
-| Economic anti-fraud | Staking module with treasury |
 
 ---
 
 ## Project Structure
 
 ```
-trace/                    Backend
+trace/                        Backend API
 ├── middleware/
-│   ├── server.ts         Express API (all endpoints)
-│   ├── traceProcessor.ts Sui TX builders + Walrus upload
-│   ├── certificate.ts    HTML certificate generator
-│   └── db.ts             PostgreSQL + file fallback
-├── move/                 Sui Move smart contracts
-│   ├── sources/
-│   │   ├── media.move
-│   │   ├── delegation.move
-│   │   └── staking.move
-│   └── tests/
-└── scripts/
+│   ├── server.ts             All endpoints — provenance + bank + agents
+│   ├── traceProcessor.ts     Sui TX builders + Walrus upload
+│   ├── certificate.ts        HTML certificate with bank summary
+│   └── db.ts                 PostgreSQL + file fallback
+├── agent/
+│   ├── sighting.ts           Sighting records — build/write/query
+│   └── memwal-integration.ts MemWal client — remember/recall/health
+└── move/
+    ├── sources/
+    │   ├── media.move         MediaRecord + EditRecord + RevocationRecord
+    │   ├── delegation.move    OrgRoot + DelegationRecord
+    │   ├── staking.move       StakeDeposit + Treasury + anti-backdating
+    │   └── seal_policy.move   BankAccessPolicy + VerifierCredential + seal_approve
+    └── tests/                 29 unit tests across all 4 modules
 
-trace-frontend/           React + Vite frontend
-trace-extension/          Chrome MV3 extension
+trace-frontend/               React + Vite + Tailwind
+└── pages/
+    ├── landing-page          Live protocol stats
+    ├── verify-page           Verification + bank sighting history
+    ├── upload-page           Register + bank pre-check
+    ├── bank-page             Memory Bank dashboard
+    ├── explorer-page         Registry browser
+    ├── provenance-graph      Interactive DAG
+    └── agent-page            Agent status
+
+trace-extension/              Chrome MV3
+├── content.js                Auto-scans images + 320px hover panel
+├── background.js             TRACE API + MemWal queries
+└── popup.html                Stats + history + toggle
 ```
+
+---
+
+## Why Sui + Walrus + MemWal + Seal
+
+| Technology | Why TRACE Needs It |
+|------------|-------------------|
+| **Sui object model** | MediaRecord, EditRecord, Certificate are first-class objects — perfect for provenance graphs |
+| **Move resource model** | Provenance objects cannot be duplicated or forged at the VM level |
+| **zkLogin** | Journalists authenticate with Google — no wallet required for mainstream adoption |
+| **Sponsored transactions** | Public verification is completely gas-free |
+| **sui::clock** | Tamper-resistant timestamps anchored to consensus |
+| **Walrus blob storage** | Media survives node failures — permanent, censorship-resistant |
+| **Walrus blob certification** | Storage receipt is the cryptographic proof of existence |
+| **MemWal** | Agents remember across sessions — the bank compounds |
+| **Seal** | Sighting records anonymized — bank is a public good without compromising contributor privacy |
 
 ---
 
 ## Market Context
 
-- **3.5B images** shared daily — each a potential verification target
-- **EU AI Act (2026)** — mandates synthetic media disclosure
-- **C2PA** — Adobe, BBC, Microsoft, Google coalition — but centralized
-- **TRACE advantage** — on-chain provenance, no company controls the truth
-- **Revenue model** — free verify (adoption) · paid register (newsrooms) · enterprise delegation · protocol staking fees
+- 500+ hours of video uploaded to YouTube per minute — zero provenance attached
+- Deepfakes increased 550% from 2019–2024 (Sensity AI)
+- 75% of people cannot reliably detect AI-generated video (MIT Media Lab, 2023)
+- EU AI Act (2026) mandates synthetic media disclosure
+- C2PA (Adobe, BBC, Microsoft, Google) is the centralised standard — TRACE is the decentralised version
+- Digital evidence increasingly inadmissible in court without authenticated chain of custody
 
-Built for the **Sui Walrus Hackathon 2025**.  
-License: MIT
+**TRACE is not a demo. It is deployed infrastructure processing real Walrus blobs and real Sui transactions today.**
+
+---
+
+Stack: Sui · Walrus · MemWal · Seal · License: MIT
