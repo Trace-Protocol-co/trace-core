@@ -2,64 +2,39 @@
  * TRACE — Authenticity Certificate Generator (F-5)
  * Generates a Walrus-hosted HTML certificate with QR code for any registered media.
  */
-
 import QRCode from "qrcode";
 import { CONFIG } from "./traceProcessor.js";
-
-export interface CertificateData {
-  mediaId: string;
-  blobId: string;
-  suiTx: string;
-  creator: string;
-  timestamp: number;
-  integrity: number;
-  editType: number;
-  aiScore: number;
-  description: string;
-  contentHash: string;
-  revoked: boolean;
-  // Collective Memory Bank (F-5, F-9)
-  bankSightingCount?: number;
-  bankFirstSeen?: string;
-  bankSources?: string[];
-}
-
-const INTEGRITY_LABELS: Record<number, string> = {
-  0: "VERIFIED ORIGINAL",
-  1: "MODIFIED",
-  2: "UNVERIFIED",
-  3: "AI GENERATED",
+const INTEGRITY_LABELS = {
+    0: "VERIFIED ORIGINAL",
+    1: "MODIFIED",
+    2: "UNVERIFIED",
+    3: "AI GENERATED",
 };
-
-const INTEGRITY_COLORS: Record<number, string> = {
-  0: "#34d399",
-  1: "#fbbf24",
-  2: "#f43f5e",
-  3: "#a78bfa",
+const INTEGRITY_COLORS = {
+    0: "#34d399",
+    1: "#fbbf24",
+    2: "#f43f5e",
+    3: "#a78bfa",
 };
-
-const EDIT_TYPE_LABELS: Record<number, string> = {
-  0: "ORIGINAL", 1: "TRIM", 2: "COLOR GRADE", 3: "SUBTITLE",
-  4: "AI REMIX",  5: "CROP", 6: "MERGE",       7: "TRANSLATE",
+const EDIT_TYPE_LABELS = {
+    0: "ORIGINAL", 1: "TRIM", 2: "COLOR GRADE", 3: "SUBTITLE",
+    4: "AI REMIX", 5: "CROP", 6: "MERGE", 7: "TRANSLATE",
 };
-
-export async function generateCertificateHTML(data: CertificateData): Promise<string> {
-  const verifyUrl = `${process.env.APP_URL ?? "https://www.traceprotocol.co"}/verify?hash=${data.contentHash}`;
-  const suiExplorerUrl = `https://suiexplorer.com/txblock/${data.suiTx}?network=testnet`;
-  const walrusUrl = `${CONFIG.WALRUS_EXPLORER}/${data.blobId}`;
-  const integrityColor = INTEGRITY_COLORS[data.integrity] ?? "#94a3b8";
-  const integrityLabel = INTEGRITY_LABELS[data.integrity] ?? "UNKNOWN";
-  const editLabel = EDIT_TYPE_LABELS[data.editType] ?? "UNKNOWN";
-  const formattedDate = new Date(data.timestamp).toUTCString();
-
-  // Generate QR code as base64 PNG
-  const qrDataUrl = await QRCode.toDataURL(verifyUrl, {
-    width: 200,
-    margin: 2,
-    color: { dark: "#000000", light: "#ffffff" },
-  });
-
-  return `<!DOCTYPE html>
+export async function generateCertificateHTML(data) {
+    const verifyUrl = `${process.env.APP_URL ?? "https://www.traceprotocol.co"}/verify?hash=${data.contentHash}`;
+    const suiExplorerUrl = `https://suiexplorer.com/txblock/${data.suiTx}?network=testnet`;
+    const walrusUrl = `${CONFIG.WALRUS_EXPLORER}/${data.blobId}`;
+    const integrityColor = INTEGRITY_COLORS[data.integrity] ?? "#94a3b8";
+    const integrityLabel = INTEGRITY_LABELS[data.integrity] ?? "UNKNOWN";
+    const editLabel = EDIT_TYPE_LABELS[data.editType] ?? "UNKNOWN";
+    const formattedDate = new Date(data.timestamp).toUTCString();
+    // Generate QR code as base64 PNG
+    const qrDataUrl = await QRCode.toDataURL(verifyUrl, {
+        width: 200,
+        margin: 2,
+        color: { dark: "#000000", light: "#ffffff" },
+    });
+    return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -417,12 +392,11 @@ export async function generateCertificateHTML(data: CertificateData): Promise<st
 </body>
 </html>`;
 }
-
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+function escapeHtml(str) {
+    return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
 }

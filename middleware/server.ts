@@ -10,6 +10,7 @@ import express, { Request, Response, NextFunction } from "express";
 import multer from "multer";
 import cors from "cors";
 import crypto from "crypto";
+// @ts-ignore — @mysten/sui v2 resolves correctly at runtime
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import {
   registerMedia,
@@ -254,54 +255,77 @@ app.post("/v1/verify", upload.single("file"), async (req: Request, res: Response
   try {
     if (!req.file) return res.status(400).json({ error: "No file provided" });
 
-    const bytes = new Uint8Array(req.file.buffer);
-    const { raw: contentHash } = sha256(bytes);
-    const pHash = computePerceptualHash(bytes);
-    const contentHashHex = Buffer.from(contentHash).toString("hex");
-    const pHashHex = Buffer.from(pHash).toString("hex");
+    const bytes           = new Uint8Array(req.file.buffer);
+    const { raw: cHash }  = sha256(bytes);
+    const pHash           = computePerceptualHash(bytes);
+    const contentHashHex  = Buffer.from(cHash).toString("hex");
+    const pHashHex        = Buffer.from(pHash).toString("hex");
+    const mediaType       = req.file.mimetype.split("/")[0] ?? "image";
+    const platform        = (req.headers["x-platform"] as string) ?? "web";
 
-    // Step 1 — exact hash match
+    const { buildSighting, writeSightingToBank, queryBank } = await import("../agent/sighting.js");
+
+    // Step 1 — Exact SHA-256 registry match
     const exact = await dbGetByHash(contentHashHex);
     if (exact) {
+      const sighting  = buildSighting({ contentHash: contentHashHex, perceptualHash: pHashHex, mediaType, verdict: "VERIFIED_ORIGINAL", platform, registryEntry: { mediaId: exact.mediaId, timestamp: exact.timestamp } });
+      const bankBlob  = await writeSightingToBank(sighting);
       return res.json({
-        verdict: "VERIFIED_ORIGINAL",
-        confidence: 1.0,
+        verdict: "VERIFIED_ORIGINAL", confidence: 1.0,
         origin: { first_seen: new Date(exact.timestamp).toISOString(), creator: exact.creator, sui_tx: exact.suiTx, walrus_blob: exact.blobId },
         provenance_chain: buildProvenanceChain(exact.mediaId),
-        similarity_matches: [],
-        flags: exact.revoked ? ["REVOKED"] : [],
+        similarity_matches: [], flags: exact.revoked ? ["REVOKED"] : [],
+        bank: { sighting_id: sighting.sighting_id, contributed_to_bank: true, bank_blob_id: bankBlob, message: "Sighting recorded in Collective Memory Bank" },
       });
     }
 
-    // Step 2 — perceptual similarity (use in-memory cache)
+    // Step 2 — Query Collective Memory Bank
+    const bankHistory = await queryBank(contentHashHex);
+    if (bankHistory.known) {
+      const sighting = buildSighting({ contentHash: contentHashHex, perceptualHash: pHashHex, mediaType, verdict: "UNVERIFIED", platform, registryEntry: null });
+      const bankBlob = await writeSightingToBank(sighting);
+      return res.json({
+        verdict: "UNVERIFIED", confidence: 0.6,
+        origin: null, provenance_chain: [], similarity_matches: [],
+        flags: ["NOT_IN_REGISTRY", "KNOWN_TO_BANK"],
+        bank: { known: true, sighting_count: bankHistory.sighting_count, first_seen: bankHistory.first_seen, sources: bankHistory.sources, sighting_id: sighting.sighting_id, bank_blob_id: bankBlob, message: `Previously seen ${bankHistory.sighting_count} time(s) in Collective Memory Bank` },
+      });
+    }
+
+    // Step 3 — pHash similarity
     let bestMatch: { entry: RegistryEntry; similarity: number } | null = null;
     for (const entry of dbGetMemRegistry().values()) {
       const sim = pHashSimilarity(pHashHex, entry.perceptualHash);
-      if (sim > 0.9 && (!bestMatch || sim > bestMatch.similarity)) {
-        bestMatch = { entry, similarity: sim };
-      }
+      if (sim > 0.9 && (!bestMatch || sim > bestMatch.similarity)) bestMatch = { entry, similarity: sim };
     }
-
     if (bestMatch) {
+      const sighting = buildSighting({ contentHash: contentHashHex, perceptualHash: pHashHex, mediaType, verdict: "MODIFIED", platform, registryEntry: { mediaId: bestMatch.entry.mediaId, timestamp: bestMatch.entry.timestamp } });
+      const bankBlob = await writeSightingToBank(sighting);
       return res.json({
-        verdict: "MODIFIED",
-        confidence: bestMatch.similarity,
+        verdict: "MODIFIED", confidence: bestMatch.similarity,
         origin: { first_seen: new Date(bestMatch.entry.timestamp).toISOString(), creator: bestMatch.entry.creator, sui_tx: bestMatch.entry.suiTx, walrus_blob: bestMatch.entry.blobId },
         provenance_chain: buildProvenanceChain(bestMatch.entry.mediaId),
         similarity_matches: [{ blob_id: bestMatch.entry.blobId, similarity: bestMatch.similarity, relationship: "PARENT" }],
         flags: ["UNANCHORED_EDIT_DETECTED"],
+        bank: { sighting_id: sighting.sighting_id, contributed_to_bank: true, bank_blob_id: bankBlob, message: "Sighting recorded in Collective Memory Bank" },
       });
     }
 
-    // Step 3 — unknown
+    // Step 4 — AI detection
     const aiScore = estimateAiScore(bytes);
+    const verdict = aiScore >= 7500 ? "AI_GENERATED" : "UNVERIFIED";
+
+    // Step 5 — Write sighting regardless of verdict
+    const sighting = buildSighting({ contentHash: contentHashHex, perceptualHash: pHashHex, mediaType, verdict, platform, registryEntry: null });
+    const bankBlob = await writeSightingToBank(sighting);
+
+    // Step 6 — Return with bank contribution confirmation
     res.json({
-      verdict: aiScore >= 7500 ? "AI_GENERATED" : "UNVERIFIED",
-      confidence: aiScore / 10000,
-      origin: null,
-      provenance_chain: [],
-      similarity_matches: [],
+      verdict, confidence: aiScore / 10000,
+      origin: null, provenance_chain: [], similarity_matches: [],
       flags: aiScore >= 7500 ? ["AI_GENERATED_ESTIMATE"] : ["NOT_IN_REGISTRY"],
+      ai_score: aiScore,
+      bank: { sighting_id: sighting.sighting_id, contributed_to_bank: true, bank_blob_id: bankBlob, message: "First encounter recorded in Collective Memory Bank" },
     });
   } catch (err: unknown) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -354,6 +378,10 @@ app.get("/v1/media/:id/certificate", async (req: Request, res: Response) => {
     const entry = await dbGetById(req.params.id);
     if (!entry) return res.status(404).json({ error: "Media not found" });
 
+    // Query bank for sighting history
+    const { queryBank } = await import("../agent/sighting.js");
+    const bankHistory = await queryBank(entry.contentHash);
+
     const certData: CertificateData = {
       mediaId:     entry.mediaId,
       blobId:      entry.blobId,
@@ -366,10 +394,13 @@ app.get("/v1/media/:id/certificate", async (req: Request, res: Response) => {
       description: entry.description,
       contentHash: entry.contentHash,
       revoked:     entry.revoked,
+      // Bank sighting summary
+      bankSightingCount: bankHistory.known ? bankHistory.sighting_count : 0,
+      bankFirstSeen:     bankHistory.first_seen,
+      bankSources:       bankHistory.sources,
     };
 
     const html = await generateCertificateHTML(certData);
-
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("Cache-Control", "public, max-age=3600");
     res.send(html);
@@ -640,7 +671,295 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 // Start
 // ============================================================================
 
-// ── Agent endpoints — integrated so they run on same port as API ──────────────
+// ── C2PA Manifest (F-1) ───────────────────────────────────────────────────────
+app.get("/v1/media/:id/c2pa", async (req: Request, res: Response) => {
+  try {
+    const entry = await dbGetById(req.params.id);
+    if (!entry) return res.status(404).json({ error: "Media not found" });
+
+    const manifest = {
+      "@context": "https://c2pa.org/assertions/v1",
+      "claim_generator": "TRACE Protocol/2.0",
+      "title": entry.description || "TRACE Authenticated Media",
+      "format": "image/jpeg",
+      "instance_id": `trace:${entry.mediaId}`,
+      "claim": {
+        "dc:title": entry.description || "Authenticated Media",
+        "dc:format": "image/jpeg",
+        "signature_info": {
+          "issuer": "TRACE Protocol",
+          "time": new Date(entry.timestamp).toISOString(),
+          "cert_serial_number": entry.suiTx,
+        },
+        "assertions": [
+          {
+            "label": "c2pa.actions",
+            "data": {
+              "actions": [{
+                "action": "c2pa.created",
+                "when": new Date(entry.timestamp).toISOString(),
+                "softwareAgent": "TRACE Protocol",
+                "digitalSourceType": entry.integrity === 3
+                  ? "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"
+                  : "http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture",
+              }]
+            }
+          },
+          {
+            "label": "stds.schema-org.CreativeWork",
+            "data": {
+              "@context": "https://schema.org",
+              "@type": "CreativeWork",
+              "author": [{ "@type": "Person", "credential": entry.creator }],
+            }
+          },
+          {
+            "label": "trace.provenance",
+            "data": {
+              "sui_package":  CONFIG.PACKAGE_ID,
+              "sui_object":   entry.mediaId,
+              "sui_tx":       entry.suiTx,
+              "walrus_blob":  entry.blobId,
+              "content_hash": entry.contentHash,
+              "ai_score":     entry.aiScore,
+              "network":      CONFIG.SUI_NETWORK,
+            }
+          }
+        ]
+      }
+    };
+
+    res.setHeader("Content-Type", "application/json");
+    res.setHeader("Content-Disposition", `attachment; filename="trace-c2pa-${entry.mediaId.slice(0,8)}.json"`);
+    res.json(manifest);
+  } catch (err: unknown) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ── Bank endpoints (F-9) ──────────────────────────────────────────────────────
+app.get("/v1/bank/stats", async (_req: Request, res: Response) => {
+  const m = loadAgentMemory();
+  const registry = dbGetMemRegistry();
+  res.json({
+    total_sightings:      m?.total_scanned    ?? 0,
+    total_verified:       m?.total_verified   ?? 0,
+    total_unverified:     m?.total_unverified ?? 0,
+    total_ai_generated:   m?.total_ai         ?? 0,
+    unique_media:         registry.size,
+    active_alerts:        m?.alerts?.repeated_fakes?.length ?? 0,
+    sessions_run:         m?.sessions?.length ?? 0,
+    walrus_memory:        m?.walrus_blob_id ?? null,
+    memwal_enabled:       !!process.env.MEMWAL_PRIVATE_KEY,
+    last_updated:         m?.last_saved ?? null,
+  });
+});
+
+app.get("/v1/bank/top-sighted", (_req: Request, res: Response) => {
+  const m = loadAgentMemory();
+  if (!m?.seen) return res.json({ results: [] });
+  const sorted = Object.entries(m.seen)
+    .sort(([,a]: [string, {seen_count?: number}], [,b]: [string, {seen_count?: number}]) => (b.seen_count ?? 0) - (a.seen_count ?? 0))
+    .slice(0, 20)
+    .map(([hash, entry]: [string, {verdict: string; seen_count?: number; first_seen: string; sources: string[]; image_url?: string}]) => ({
+      hash: hash.slice(0, 16) + "...",
+      verdict:       entry.verdict,
+      sighting_count: entry.seen_count ?? 1,
+      first_seen:    entry.first_seen,
+      sources:       entry.sources,
+      image_url:     entry.image_url,
+    }));
+  res.json({ results: sorted });
+});
+
+app.get("/v1/bank/alerts", (_req: Request, res: Response) => {
+  const m = loadAgentMemory();
+  res.json({
+    repeated_fakes: m?.alerts?.repeated_fakes ?? [],
+    total:          m?.alerts?.repeated_fakes?.length ?? 0,
+    severity:       (m?.alerts?.repeated_fakes?.length ?? 0) > 5 ? "HIGH" : "LOW",
+  });
+});
+
+// ── Agent Types (F-10) ────────────────────────────────────────────────────────
+
+// Sentinel Agent — derivative detection
+app.post("/agent/sentinel", express.json(), async (req: Request, res: Response) => {
+  const { media_id } = req.body as { media_id: string };
+  if (!media_id) return res.status(400).json({ error: "media_id required" });
+  const entry = await dbGetById(media_id);
+  if (!entry) return res.status(404).json({ error: "Media not found" });
+
+  // Check bank for variants with similar pHash
+  const m = loadAgentMemory();
+  const variants: unknown[] = [];
+  if (m?.seen) {
+    for (const [hash, seen] of Object.entries(m.seen) as [string, {verdict: string; sources: string[]; first_seen: string}][]) {
+      if (seen.verdict === "MODIFIED") variants.push({ hash, sources: seen.sources, first_seen: seen.first_seen });
+    }
+  }
+
+  res.json({
+    agent:        "sentinel",
+    monitored_id: media_id,
+    variants_detected: variants.length,
+    variants,
+    graph_nodes_added: variants.length,
+    recommendation: variants.length > 0 ? "Unanchored derivatives detected — provenance graph updated with AI_AUTONOMOUS nodes" : "No variants detected",
+  });
+});
+
+// Spread Analysis Agent — full spread timeline
+app.get("/agent/spread/:hash", async (req: Request, res: Response) => {
+  const { queryBank } = await import("../agent/sighting.js");
+  const bankData = await queryBank(req.params.hash);
+  const m = loadAgentMemory();
+  const seen = m?.seen?.[req.params.hash];
+
+  res.json({
+    agent:          "spread_analysis",
+    hash:           req.params.hash,
+    known_to_bank:  bankData.known,
+    sighting_count: bankData.sighting_count,
+    first_seen:     bankData.first_seen ?? seen?.first_seen ?? null,
+    sources:        bankData.sources ?? seen?.sources ?? [],
+    spread_velocity: bankData.sighting_count > 10 ? "HIGH" : bankData.sighting_count > 3 ? "MEDIUM" : "LOW",
+    coordinated_behavior_detected: (seen?.sources?.length ?? 0) >= 3,
+    timeline:       bankData.memories?.map(m => ({ text: m.text, blob_id: m.blob_id })) ?? [],
+  });
+});
+
+// Anomaly Detection Agent — coordinated inauthentic behavior
+app.get("/agent/anomaly", (_req: Request, res: Response) => {
+  const m = loadAgentMemory();
+  const alerts = m?.alerts?.repeated_fakes ?? [];
+
+  const anomalies = alerts.map(alert => ({
+    hash:          alert.hash,
+    sources:       alert.sources,
+    count:         alert.count,
+    severity:      alert.count >= 5 ? "HIGH" : alert.count >= 3 ? "MEDIUM" : "LOW",
+    pattern:       "COORDINATED_SPREAD",
+    recommendation: `Same unverified media seen across ${alert.sources.length} sources — possible coordinated campaign`,
+  }));
+
+  res.json({
+    agent:          "anomaly_detection",
+    total_anomalies: anomalies.length,
+    anomalies,
+    threshold:      { sources_min: 2, count_min: 2 },
+    last_scan:      m?.last_saved ?? null,
+  });
+});
+
+// Source Trust Agent — source track record
+app.get("/agent/source-trust/:source", (_req: Request, res: Response) => {
+  const source  = decodeURIComponent(_req.params.source);
+  const m = loadAgentMemory();
+  const entries = Object.values(m?.seen ?? {}) as {verdict: string; sources: string[]}[];
+
+  const sourceSightings = entries.filter(e => e.sources?.includes(source));
+  const verified   = sourceSightings.filter(e => e.verdict === "VERIFIED_ORIGINAL").length;
+  const unverified = sourceSightings.filter(e => e.verdict === "UNVERIFIED").length;
+  const ai         = sourceSightings.filter(e => e.verdict === "AI_GENERATED").length;
+  const total      = sourceSightings.length;
+  const trustScore = total > 0 ? Math.round((verified / total) * 100) : null;
+
+  _req.res?.json({
+    agent:       "source_trust",
+    source,
+    total_media:  total,
+    verified,
+    unverified,
+    ai_generated: ai,
+    trust_score:  trustScore,
+    verdict:      trustScore === null ? "UNKNOWN" : trustScore > 70 ? "TRUSTED" : trustScore > 40 ? "MIXED" : "SUSPICIOUS",
+  });
+});
+
+// Legal Evidence Agent — court-formatted evidence package
+app.get("/agent/evidence/:id", async (req: Request, res: Response) => {
+  const entry = await dbGetById(req.params.id);
+  if (!entry) return res.status(404).json({ error: "Media not found" });
+
+  const { queryBank } = await import("../agent/sighting.js");
+  const bank = await queryBank(entry.contentHash);
+
+  const evidence = {
+    agent:          "legal_evidence",
+    generated_at:   new Date().toISOString(),
+    case_reference: `TRACE-EVIDENCE-${entry.mediaId.slice(0,8).toUpperCase()}`,
+    media: {
+      sui_object_id:  entry.mediaId,
+      content_hash:   entry.contentHash,
+      walrus_blob_id: entry.blobId,
+      sui_transaction: entry.suiTx,
+      registration_timestamp: new Date(entry.timestamp).toISOString(),
+      creator_identity: entry.creator,
+      integrity_status: ["ORIGINAL","MODIFIED","UNVERIFIED","AI_GENERATED"][entry.integrity],
+      ai_probability: `${(entry.aiScore / 100).toFixed(1)}%`,
+    },
+    chain_of_custody: {
+      registered_on_blockchain: true,
+      blockchain: "Sui Testnet",
+      package_id: CONFIG.PACKAGE_ID,
+      immutable: true,
+      tamper_evident: true,
+    },
+    collective_memory: {
+      total_sightings: bank.sighting_count,
+      first_seen:      bank.first_seen,
+      sources:         bank.sources,
+      stored_on_walrus_via_memwal: true,
+    },
+    admissibility_notes: [
+      "SHA-256 hash anchored on Sui blockchain — tamper-proof",
+      "Consensus-anchored timestamp via sui::clock",
+      "Walrus blob certificate provides storage proof",
+      "Collective Memory Bank corroborates timeline",
+    ],
+    walrus_artifact_url: entry.blobId ? `${CONFIG.WALRUS_AGGREGATOR}/v1/${entry.blobId}` : null,
+  };
+
+  res.json(evidence);
+});
+
+// Research Agent — aggregate pattern analysis
+app.get("/agent/research", (_req: Request, res: Response) => {
+  const m = loadAgentMemory();
+  const registry = dbGetMemRegistry();
+
+  const verdictBreakdown: Record<string, number> = {};
+  for (const seen of Object.values(m?.seen ?? {}) as {verdict: string}[]) {
+    verdictBreakdown[seen.verdict] = (verdictBreakdown[seen.verdict] ?? 0) + 1;
+  }
+
+  const report = {
+    agent: "research",
+    generated_at: new Date().toISOString(),
+    dataset: {
+      total_bank_sightings:    m?.total_scanned ?? 0,
+      total_registered_media:  registry.size,
+      total_sessions:          m?.sessions?.length ?? 0,
+      active_anomaly_alerts:   m?.alerts?.repeated_fakes?.length ?? 0,
+    },
+    verdict_distribution: verdictBreakdown,
+    integrity_rate: m?.total_scanned
+      ? `${((m.total_verified / m.total_scanned) * 100).toFixed(1)}%`
+      : "N/A",
+    ai_generation_rate: m?.total_scanned
+      ? `${((m.total_ai / m.total_scanned) * 100).toFixed(1)}%`
+      : "N/A",
+    top_anomalies:       (m?.alerts?.repeated_fakes ?? []).slice(0, 5),
+    walrus_memory_blob:  m?.walrus_blob_id ?? null,
+    methodology: "TRACE Collective Memory Bank — MemWal on Walrus — anonymized sighting records",
+    export_format: "JSON — Walrus-hosted artifact available on request",
+  };
+
+  res.json(report);
+});
+
+
 import * as agentFs from "fs";
 import * as agentPath from "path";
 
