@@ -4,7 +4,7 @@
 [![Live](https://img.shields.io/badge/Live-traceprotocol.co-10b981)](https://www.traceprotocol.co)
 [![API](https://img.shields.io/badge/API-Live-3b82f6)](https://trace-cbvb.onrender.com/v1/health)
 [![Bank](https://img.shields.io/badge/Memory%20Bank-Live-8b5cf6)](https://www.traceprotocol.co/bank)
-[![Tests](https://img.shields.io/badge/Move%20Tests-29%2F29-10b981)](./move)
+[![Tests](https://img.shields.io/badge/Move%20Tests-29%2F29-10b981)](./tests)
 [![Network](https://img.shields.io/badge/Network-Sui%20Testnet-6fbcf0)](https://suiexplorer.com)
 [![Walrus](https://img.shields.io/badge/Storage-Walrus-ff6b35)](https://walrus.xyz)
 [![MemWal](https://img.shields.io/badge/Memory-MemWal-3b82f6)](https://github.com/MystenLabs/memwal)
@@ -352,7 +352,7 @@ Chrome MV3 extension. Install from `/trace-extension` folder.
 
 ```bash
 # Backend
-git clone https://github.com/anjolagithub/trace
+git clone https://github.com/Trace-Protocol-co/trace
 cd trace && npm install
 cp .env.example .env
 npm run dev           # http://localhost:3001
@@ -363,7 +363,7 @@ echo "VITE_API_URL=http://localhost:3001" > .env.local
 npm run dev           # http://localhost:5173
 
 # Contracts
-cd trace/move
+cd trace
 sui move test         # 29/29 passing
 sui client publish --gas-budget 500000000
 
@@ -455,4 +455,5 @@ trace-extension/              Chrome MV3
 **TRACE is deployed infrastructure processing real Walrus blobs and real Sui transactions. MemWal semantic recall is live — every verification writes a sighting to Walrus-backed memory, retrievable by meaning across sessions.**
 
 ---
- · Stack: Sui · Walrus · MemWal · Seal · License: MIT
+
+**· Stack: Sui · Walrus · MemWal · Seal ·** License: MIT
