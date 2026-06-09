@@ -71,6 +71,22 @@ Seal        — privacy-preserving anonymization of sighting records
 
 ---
 
+## Why Walrus, Not Just Postgres
+
+TRACE uses both PostgreSQL and Walrus — they serve different purposes and neither replaces the other.
+
+| | PostgreSQL | Walrus |
+|-|------------|--------|
+| **Purpose** | Fast index and query cache | Tamper-evident source of truth |
+| **What's stored** | MediaRecord metadata for API queries | Original media blobs + MemWal sighting records |
+| **Verifiability** | Trust the server | Verify independently — blob ID is cryptographic proof |
+| **Permanence** | Lives on Render — deletable | Lives on Walrus network — immutable |
+| **Agent memory** | Not applicable | MemWal semantic memory — cross-session, cross-agent |
+
+**Walrus is load-bearing, not decorative.** The Walrus blob ID is the proof of existence. The MemWal blob ID is the proof of sighting. Postgres is just the index that makes queries fast. Remove Walrus and you lose verifiability — you have a database, not a provenance system.
+
+---
+
 ## Architecture — Three Layers
 
 ```
@@ -436,8 +452,7 @@ trace-extension/              Chrome MV3
 - C2PA (Adobe, BBC, Microsoft, Google) is the centralised standard — TRACE is the decentralised version
 - Digital evidence increasingly inadmissible in court without authenticated chain of custody
 
-**TRACE is not a demo. It is deployed infrastructure processing real Walrus blobs and real Sui transactions today.**
+**TRACE is deployed infrastructure processing real Walrus blobs and real Sui transactions. MemWal semantic recall is live — every verification writes a sighting to Walrus-backed memory, retrievable by meaning across sessions.**
 
 ---
-
-Stack: Sui · Walrus · MemWal · Seal · License: MIT
+ · Stack: Sui · Walrus · MemWal · Seal · License: MIT

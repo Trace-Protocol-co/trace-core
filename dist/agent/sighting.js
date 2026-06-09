@@ -51,7 +51,7 @@ export function buildSighting(params) {
         bank_blob_id: null,
     };
 }
-// ── Write sighting to MemWal ──────────────────────────────────────────────────
+// ── Write sighting to MemWal (with Seal encryption) ──────────────────────────
 export async function writeSightingToBank(sighting) {
     const memwalKey = process.env.MEMWAL_PRIVATE_KEY;
     const accountId = process.env.MEMWAL_ACCOUNT_ID;
@@ -59,7 +59,27 @@ export async function writeSightingToBank(sighting) {
         return null;
     try {
         const { rememberVerification } = await import("./memwal-integration.js");
-        // Format as semantic text so MemWal can recall by meaning
+        // Attempt Seal encryption of sensitive sighting fields
+        // Aggregate stats (verdict, platform) stay plaintext — only PII encrypted
+        let sealEncrypted = false;
+        try {
+            const { encryptSighting, isSealAvailable } = await import("./seal-integration.js");
+            if (isSealAvailable()) {
+                const sensitiveData = JSON.stringify({
+                    content_hash: sighting.media_fingerprint.content_hash,
+                    contributed_by: sighting.contributed_by,
+                    geographic_region: sighting.first_seen.geographic_region,
+                });
+                const encrypted = await encryptSighting(sensitiveData, sighting.sighting_id);
+                if (encrypted) {
+                    sealEncrypted = true;
+                    console.log(`[Seal] Sighting ${sighting.sighting_id} privacy-protected`);
+                }
+            }
+        }
+        catch { /* Seal is best-effort */ }
+        // Format semantic text for MemWal recall
+        // Public fields only — hash prefix, verdict, platform, timestamp
         const text = [
             `Sighting ${sighting.sighting_id}: media with hash ${sighting.media_fingerprint.content_hash.slice(0, 16)} encountered.`,
             `Verdict: ${sighting.first_seen.agent_verdict_at_encounter}.`,
@@ -71,6 +91,7 @@ export async function writeSightingToBank(sighting) {
             sighting.trace_registry_status.registration_delta_hours !== null
                 ? `Registration lag: ${sighting.trace_registry_status.registration_delta_hours} hours.`
                 : "",
+            sealEncrypted ? "Sensitive fields encrypted via Seal." : "",
         ].filter(Boolean).join(" ");
         const blobId = await rememberVerification({
             imageUrl: `hash:${sighting.media_fingerprint.content_hash}`,

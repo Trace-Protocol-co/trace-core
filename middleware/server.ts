@@ -646,6 +646,7 @@ function localAiEstimate(buf: Buffer): number {
 
 // ── Health ────────────────────────────────────────────────────────────────────
 app.get("/v1/health", async (_req: Request, res: Response) => {
+  const { getSealStatus } = await import("../agent/seal-integration.js");
   res.json({
     status: "ok",
     registered: await dbCount(),
@@ -655,6 +656,7 @@ app.get("/v1/health", async (_req: Request, res: Response) => {
     stakes: stakes.size,
     orgs: orgs.size,
     db: process.env.DATABASE_URL ? "postgresql" : "file",
+    seal: getSealStatus(),
   });
 });
 
@@ -741,6 +743,19 @@ app.get("/v1/media/:id/c2pa", async (req: Request, res: Response) => {
 app.get("/v1/bank/stats", async (_req: Request, res: Response) => {
   const m = loadAgentMemory();
   const registry = dbGetMemRegistry();
+
+  // Get latest MemWal blob from recall
+  let latestBlobId: string | null = m?.walrus_blob_id ?? null;
+  let walrusUrl: string | null = null;
+  try {
+    const { recallMemories } = await import("../agent/memwal-integration.js");
+    const recent = await recallMemories("sighting verified media", 1);
+    if (recent?.[0]?.blob_id) {
+      latestBlobId = recent[0].blob_id;
+      walrusUrl = `https://aggregator.walrus-testnet.walrus.space/v1/${latestBlobId}`;
+    }
+  } catch { /* non-critical */ }
+
   res.json({
     total_sightings:      m?.total_scanned    ?? 0,
     total_verified:       m?.total_verified   ?? 0,
@@ -749,9 +764,13 @@ app.get("/v1/bank/stats", async (_req: Request, res: Response) => {
     unique_media:         registry.size,
     active_alerts:        m?.alerts?.repeated_fakes?.length ?? 0,
     sessions_run:         m?.sessions?.length ?? 0,
-    walrus_memory:        m?.walrus_blob_id ?? null,
+    walrus_memory:        walrusUrl,
+    walrus_blob_id:       latestBlobId,
     memwal_enabled:       !!process.env.MEMWAL_PRIVATE_KEY,
     last_updated:         m?.last_saved ?? null,
+    walrus_explorer:      latestBlobId
+      ? `https://walruscan.com/testnet/blob/${latestBlobId}`
+      : null,
   });
 });
 
@@ -952,6 +971,9 @@ app.get("/agent/research", (_req: Request, res: Response) => {
       : "N/A",
     top_anomalies:       (m?.alerts?.repeated_fakes ?? []).slice(0, 5),
     walrus_memory_blob:  m?.walrus_blob_id ?? null,
+    walrus_explorer:     m?.walrus_blob_id
+      ? `https://walruscan.com/testnet/blob/${m.walrus_blob_id}`
+      : null,
     methodology: "TRACE Collective Memory Bank — MemWal on Walrus — anonymized sighting records",
     export_format: "JSON — Walrus-hosted artifact available on request",
   };
