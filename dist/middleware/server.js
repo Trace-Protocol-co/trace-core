@@ -13,7 +13,7 @@ import crypto from "crypto";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { registerMedia, sha256, computePerceptualHash, EditType, CONFIG, signAndBroadcast, buildGrantDelegationTx, buildRegisterOrgTx, buildDepositStakeTx, buildFilChallengeTx, } from "./traceProcessor.js";
 import { generateCertificateHTML } from "./certificate.js";
-import { dbInit, dbSave, dbGetByHash, dbGetById, dbList, dbCount, dbGetMemRegistry, dbGetMemRegistryById, } from "./db.js";
+import { dbInit, dbSave, dbGetByHash, dbGetById, dbList, dbCount, dbGetMemRegistry, dbGetMemRegistryById, dbSaveSighting, dbGetSightingStats, dbGetSightingHistory, } from "./db.js";
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "http://localhost:5173,http://localhost:3000")
@@ -195,11 +195,24 @@ app.post("/v1/verify", upload.single("file"), async (req, res) => {
         const mediaType = req.file.mimetype.split("/")[0] ?? "image";
         const platform = req.headers["x-platform"] ?? "web";
         const { buildSighting, writeSightingToBank, queryBank } = await import("../agent/sighting.js");
+        // Helper: persist sighting to PostgreSQL (survives restarts)
+        const persistSighting = (s, blob, v) => dbSaveSighting({
+            sightingId: s.sighting_id,
+            contentHash: s.media_fingerprint.content_hash,
+            perceptualHash: s.media_fingerprint.perceptual_hash,
+            mediaType: s.media_fingerprint.media_type,
+            verdict: v,
+            platform,
+            memwalBlobId: blob,
+            suiObjectId: s.trace_registry_status.sui_object_id,
+            registered: s.trace_registry_status.registered,
+        }).catch(() => { });
         // Step 1 — Exact SHA-256 registry match
         const exact = await dbGetByHash(contentHashHex);
         if (exact) {
             const sighting = buildSighting({ contentHash: contentHashHex, perceptualHash: pHashHex, mediaType, verdict: "VERIFIED_ORIGINAL", platform, registryEntry: { mediaId: exact.mediaId, timestamp: exact.timestamp } });
             const bankBlob = await writeSightingToBank(sighting);
+            await persistSighting(sighting, bankBlob, "VERIFIED_ORIGINAL");
             return res.json({
                 verdict: "VERIFIED_ORIGINAL", confidence: 1.0,
                 origin: { first_seen: new Date(exact.timestamp).toISOString(), creator: exact.creator, sui_tx: exact.suiTx, walrus_blob: exact.blobId },
@@ -213,6 +226,7 @@ app.post("/v1/verify", upload.single("file"), async (req, res) => {
         if (bankHistory.known) {
             const sighting = buildSighting({ contentHash: contentHashHex, perceptualHash: pHashHex, mediaType, verdict: "UNVERIFIED", platform, registryEntry: null });
             const bankBlob = await writeSightingToBank(sighting);
+            await persistSighting(sighting, bankBlob, "UNVERIFIED");
             return res.json({
                 verdict: "UNVERIFIED", confidence: 0.6,
                 origin: null, provenance_chain: [], similarity_matches: [],
@@ -230,6 +244,7 @@ app.post("/v1/verify", upload.single("file"), async (req, res) => {
         if (bestMatch) {
             const sighting = buildSighting({ contentHash: contentHashHex, perceptualHash: pHashHex, mediaType, verdict: "MODIFIED", platform, registryEntry: { mediaId: bestMatch.entry.mediaId, timestamp: bestMatch.entry.timestamp } });
             const bankBlob = await writeSightingToBank(sighting);
+            await persistSighting(sighting, bankBlob, "MODIFIED");
             return res.json({
                 verdict: "MODIFIED", confidence: bestMatch.similarity,
                 origin: { first_seen: new Date(bestMatch.entry.timestamp).toISOString(), creator: bestMatch.entry.creator, sui_tx: bestMatch.entry.suiTx, walrus_blob: bestMatch.entry.blobId },
@@ -245,6 +260,7 @@ app.post("/v1/verify", upload.single("file"), async (req, res) => {
         // Step 5 — Write sighting regardless of verdict
         const sighting = buildSighting({ contentHash: contentHashHex, perceptualHash: pHashHex, mediaType, verdict, platform, registryEntry: null });
         const bankBlob = await writeSightingToBank(sighting);
+        await persistSighting(sighting, bankBlob, verdict);
         // Step 6 — Return with bank contribution confirmation
         res.json({
             verdict, confidence: aiScore / 10000,
@@ -636,6 +652,11 @@ app.get("/v1/media/:id/c2pa", async (req, res) => {
 app.get("/v1/bank/stats", async (_req, res) => {
     const m = loadAgentMemory();
     const registry = dbGetMemRegistry();
+    // Get sighting stats from PostgreSQL — survives Render restarts
+    const [dbStats, sightingStats] = await Promise.all([
+        getStatsFromDb(),
+        dbGetSightingStats(),
+    ]);
     // Get latest MemWal blob from recall
     let latestBlobId = m?.walrus_blob_id ?? null;
     let walrusUrl = null;
@@ -649,17 +670,22 @@ app.get("/v1/bank/stats", async (_req, res) => {
     }
     catch { /* non-critical */ }
     res.json({
-        total_sightings: m?.total_scanned ?? 0,
-        total_verified: m?.total_verified ?? 0,
-        total_unverified: m?.total_unverified ?? 0,
-        total_ai_generated: m?.total_ai ?? 0,
-        unique_media: registry.size,
+        // Sighting stats from PostgreSQL bank_sightings table
+        total_sightings: sightingStats.total || m?.total_scanned || 0,
+        total_verified: sightingStats.verified || m?.total_verified || dbStats.total_verified,
+        total_unverified: sightingStats.unverified || m?.total_unverified || 0,
+        total_ai_generated: sightingStats.ai_generated || m?.total_ai || 0,
+        total_modified: sightingStats.modified || 0,
+        unique_media: registry.size || dbStats.unique_media,
+        memwal_blobs: sightingStats.memwal_blobs,
+        first_sighting: sightingStats.first_seen,
+        last_sighting: sightingStats.last_seen,
         active_alerts: m?.alerts?.repeated_fakes?.length ?? 0,
         sessions_run: m?.sessions?.length ?? 0,
         walrus_memory: walrusUrl,
         walrus_blob_id: latestBlobId,
         memwal_enabled: !!process.env.MEMWAL_PRIVATE_KEY,
-        last_updated: m?.last_saved ?? null,
+        last_updated: sightingStats.last_seen ?? m?.last_saved ?? null,
         walrus_explorer: latestBlobId
             ? `https://walruscan.com/testnet/blob/${latestBlobId}`
             : null,
@@ -688,6 +714,25 @@ app.get("/v1/bank/alerts", (_req, res) => {
         repeated_fakes: m?.alerts?.repeated_fakes ?? [],
         total: m?.alerts?.repeated_fakes?.length ?? 0,
         severity: (m?.alerts?.repeated_fakes?.length ?? 0) > 5 ? "HIGH" : "LOW",
+    });
+});
+// Sighting history for a specific hash — proves bank remembers across restarts
+app.get("/v1/bank/sightings/:hash", async (req, res) => {
+    const history = await dbGetSightingHistory(req.params.hash);
+    res.json({
+        hash: req.params.hash,
+        count: history.length,
+        sightings: history.map(s => ({
+            sighting_id: s.sighting_id,
+            verdict: s.verdict,
+            platform: s.platform,
+            memwal_blob: s.memwal_blob_id,
+            walrus_link: s.memwal_blob_id
+                ? `https://walruscan.com/testnet/blob/${s.memwal_blob_id}`
+                : null,
+            registered: s.registered,
+            seen_at: s.created_at,
+        })),
     });
 });
 // ── Agent Types (F-10) ────────────────────────────────────────────────────────
@@ -860,12 +905,30 @@ import * as agentPath from "path";
 const AGENT_MEM_FILE = agentPath.join(process.cwd(), "agent", "memory.json");
 const WALRUS_AGG_URL = process.env.WALRUS_AGGREGATOR ?? "https://aggregator.walrus-testnet.walrus.space";
 function loadAgentMemory() {
+    // Try local file first (populated during runtime)
     try {
         if (agentFs.existsSync(AGENT_MEM_FILE))
             return JSON.parse(agentFs.readFileSync(AGENT_MEM_FILE, "utf8"));
     }
     catch { /* ignore */ }
     return null;
+}
+// Build stats from PostgreSQL — survives Render restarts
+async function getStatsFromDb() {
+    try {
+        const registry = dbGetMemRegistry();
+        const entries = [...registry.values()];
+        return {
+            total_scanned: entries.length,
+            total_verified: entries.filter(e => e.integrity === 0).length,
+            total_unverified: entries.filter(e => e.integrity === 2).length,
+            total_ai: entries.filter(e => e.integrity === 3).length,
+            unique_media: registry.size,
+        };
+    }
+    catch {
+        return { total_scanned: 0, total_verified: 0, total_unverified: 0, total_ai: 0, unique_media: 0 };
+    }
 }
 app.get("/agent/status", (_req, res) => {
     const m = loadAgentMemory();

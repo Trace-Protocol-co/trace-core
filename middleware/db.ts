@@ -88,8 +88,24 @@ async function initSchema(pool: Pool) {
     CREATE INDEX IF NOT EXISTS idx_content_hash ON media_registry(content_hash);
     CREATE INDEX IF NOT EXISTS idx_creator ON media_registry(creator);
     CREATE INDEX IF NOT EXISTS idx_timestamp ON media_registry(timestamp DESC);
+
+    CREATE TABLE IF NOT EXISTS bank_sightings (
+      sighting_id     VARCHAR PRIMARY KEY,
+      content_hash    VARCHAR NOT NULL,
+      perceptual_hash VARCHAR,
+      media_type      VARCHAR DEFAULT 'image',
+      verdict         VARCHAR NOT NULL,
+      platform        VARCHAR DEFAULT 'web',
+      memwal_blob_id  VARCHAR,
+      sui_object_id   VARCHAR,
+      registered      BOOLEAN DEFAULT FALSE,
+      created_at      TIMESTAMP DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sighting_hash    ON bank_sightings(content_hash);
+    CREATE INDEX IF NOT EXISTS idx_sighting_verdict ON bank_sightings(verdict);
+    CREATE INDEX IF NOT EXISTS idx_sighting_created ON bank_sightings(created_at DESC);
   `);
-  console.log("[DB] PostgreSQL schema ready");
+  console.log("[DB] PostgreSQL schema ready (media_registry + bank_sightings)");
 }
 
 // ── Public interface ──────────────────────────────────────────────────────────
@@ -244,4 +260,119 @@ function rowToEntry(row: Record<string, unknown>): RegistryEntry {
     certificateUrl: String(row.certificate_url ?? ""),
     description:    String(row.description ?? ""),
   };
+}
+
+// ── Bank Sightings (persists across Render restarts) ──────────────────────────
+
+export interface SightingRow {
+  sighting_id:    string;
+  content_hash:   string;
+  perceptual_hash: string;
+  media_type:     string;
+  verdict:        string;
+  platform:       string;
+  memwal_blob_id: string | null;
+  sui_object_id:  string | null;
+  registered:     boolean;
+  created_at:     string;
+}
+
+export async function dbSaveSighting(params: {
+  sightingId:    string;
+  contentHash:   string;
+  perceptualHash: string;
+  mediaType:     string;
+  verdict:       string;
+  platform:      string;
+  memwalBlobId?: string | null;
+  suiObjectId?:  string | null;
+  registered:    boolean;
+}): Promise<void> {
+  const pool = await getPool();
+  if (!pool) return; // file fallback doesn't persist sightings — that's ok
+
+  try {
+    await pool.query(`
+      INSERT INTO bank_sightings (
+        sighting_id, content_hash, perceptual_hash, media_type,
+        verdict, platform, memwal_blob_id, sui_object_id, registered
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      ON CONFLICT (sighting_id) DO NOTHING
+    `, [
+      params.sightingId,
+      params.contentHash,
+      params.perceptualHash,
+      params.mediaType,
+      params.verdict,
+      params.platform,
+      params.memwalBlobId ?? null,
+      params.suiObjectId ?? null,
+      params.registered,
+    ]);
+  } catch (e) {
+    console.warn("[DB] Sighting save failed:", e);
+  }
+}
+
+export async function dbGetSightingStats(): Promise<{
+  total:        number;
+  verified:     number;
+  unverified:   number;
+  ai_generated: number;
+  modified:     number;
+  first_seen:   string | null;
+  last_seen:    string | null;
+  top_hash:     string | null;
+  memwal_blobs: number;
+}> {
+  const pool = await getPool();
+  if (!pool) return { total: 0, verified: 0, unverified: 0, ai_generated: 0, modified: 0, first_seen: null, last_seen: null, top_hash: null, memwal_blobs: 0 };
+
+  try {
+    const r = await pool.query(`
+      SELECT
+        COUNT(*)                                              AS total,
+        COUNT(*) FILTER (WHERE verdict = 'VERIFIED_ORIGINAL') AS verified,
+        COUNT(*) FILTER (WHERE verdict = 'UNVERIFIED')        AS unverified,
+        COUNT(*) FILTER (WHERE verdict = 'AI_GENERATED')      AS ai_generated,
+        COUNT(*) FILTER (WHERE verdict = 'MODIFIED')          AS modified,
+        MIN(created_at)::text                                 AS first_seen,
+        MAX(created_at)::text                                 AS last_seen,
+        COUNT(*) FILTER (WHERE memwal_blob_id IS NOT NULL)    AS memwal_blobs
+      FROM bank_sightings
+    `);
+    const topR = await pool.query(`
+      SELECT content_hash, COUNT(*) AS cnt
+      FROM bank_sightings
+      GROUP BY content_hash
+      ORDER BY cnt DESC
+      LIMIT 1
+    `);
+    return {
+      total:        Number(r.rows[0]?.total        ?? 0),
+      verified:     Number(r.rows[0]?.verified     ?? 0),
+      unverified:   Number(r.rows[0]?.unverified   ?? 0),
+      ai_generated: Number(r.rows[0]?.ai_generated ?? 0),
+      modified:     Number(r.rows[0]?.modified     ?? 0),
+      first_seen:   r.rows[0]?.first_seen  ?? null,
+      last_seen:    r.rows[0]?.last_seen   ?? null,
+      top_hash:     topR.rows[0]?.content_hash ?? null,
+      memwal_blobs: Number(r.rows[0]?.memwal_blobs ?? 0),
+    };
+  } catch (e) {
+    console.warn("[DB] Sighting stats failed:", e);
+    return { total: 0, verified: 0, unverified: 0, ai_generated: 0, modified: 0, first_seen: null, last_seen: null, top_hash: null, memwal_blobs: 0 };
+  }
+}
+
+export async function dbGetSightingHistory(contentHash: string): Promise<SightingRow[]> {
+  const pool = await getPool();
+  if (!pool) return [];
+  try {
+    const r = await pool.query(
+      `SELECT * FROM bank_sightings WHERE content_hash = $1 ORDER BY created_at DESC LIMIT 20`,
+      [contentHash]
+    );
+    return r.rows as SightingRow[];
+  } catch { return []; }
 }
