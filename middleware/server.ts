@@ -805,7 +805,7 @@ app.get("/v1/bank/stats", async (_req: Request, res: Response) => {
     total_unverified:   sightingStats.unverified   || m?.total_unverified || 0,
     total_ai_generated: sightingStats.ai_generated || m?.total_ai         || 0,
     total_modified:     sightingStats.modified     || 0,
-    unique_media:       registry.size              || dbStats.unique_media,
+    unique_media:       await dbCount(),
     memwal_blobs:       sightingStats.memwal_blobs,
     first_sighting:     sightingStats.first_seen,
     last_sighting:      sightingStats.last_seen,
@@ -1052,7 +1052,7 @@ app.get("/agent/research", async (_req: Request, res: Response) => {
     generated_at: new Date().toISOString(),
     dataset: {
       total_bank_sightings:   total,
-      total_registered_media: registry.size || dbStats.unique_media,
+      total_registered_media: await dbCount(),
       total_sessions:         m?.sessions?.length ?? 0,
       active_anomaly_alerts:  m?.alerts?.repeated_fakes?.length ?? 0,
       memwal_blobs_on_walrus: sightingStats.memwal_blobs,
