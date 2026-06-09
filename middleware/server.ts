@@ -867,6 +867,35 @@ app.get("/v1/bank/sightings/:hash", async (req: Request, res: Response) => {
   });
 });
 
+// Passive bank encounter — extension writes sighting for every image seen
+app.post("/v1/bank/encounter", express.json(), async (req: Request, res: Response) => {
+  try {
+    const { url_hash, source, verdict, media_url } = req.body as {
+      url_hash: string; source: string; verdict: string; media_url?: string;
+    };
+    if (!url_hash || !source) return res.status(400).json({ error: "url_hash and source required" });
+
+    const sightingId = "sight_" + Math.random().toString(36).slice(2, 18);
+    await dbSaveSighting({
+      sightingId, contentHash: url_hash, perceptualHash: url_hash,
+      mediaType: "image", verdict: verdict || "UNKNOWN", platform: source,
+      memwalBlobId: null, suiObjectId: null, registered: false,
+    });
+
+    try {
+      const { rememberVerification } = await import("../agent/memwal-integration.js");
+      await rememberVerification({
+        imageUrl: media_url ?? `hash:${url_hash}`, source,
+        verdict: verdict || "UNKNOWN", confidence: 0.3, hash: url_hash,
+      });
+    } catch { /* non-critical */ }
+
+    res.json({ sighting_id: sightingId, recorded: true });
+  } catch (err: unknown) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // ── Agent Types (F-10) ────────────────────────────────────────────────────────
 
 // Sentinel Agent — derivative detection
