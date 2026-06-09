@@ -182,11 +182,10 @@ app.post("/v1/register", upload.single("file"), async (req: Request, res: Respon
       parent_id: parentId,
       edit_type: editTypeStr = "0",
       ai_score: aiScoreStr = "0",
-      creator_address,   // zkLogin address from frontend — who is actually registering
-      creator_email,     // display identity (e.g. john@channelstv.com)
+      creator_address,
+      creator_email,
     } = req.body;
 
-    // Require creator identity for registration (Producer side must authenticate)
     if (!creator_address) {
       return res.status(401).json({
         error: "Authentication required. Please sign in with Google to register media.",
@@ -197,6 +196,25 @@ app.post("/v1/register", upload.single("file"), async (req: Request, res: Respon
     const editType = parseInt(editTypeStr, 10) as EditTypeValue;
     const aiScore  = Math.min(10000, Math.max(0, parseInt(aiScoreStr, 10)));
 
+    // ── Duplicate check — same image already registered ───────────────────────
+    const { raw: contentHashRaw } = sha256(new Uint8Array(req.file.buffer));
+    const contentHashHex = Buffer.from(contentHashRaw).toString("hex");
+    const existing = await dbGetByHash(contentHashHex);
+
+    if (existing) {
+      return res.status(409).json({
+        error:       "already_registered",
+        message:     "This image is already registered on TRACE.",
+        media_id:    existing.mediaId,
+        creator:     existing.creator,
+        registered:  new Date(existing.timestamp).toISOString(),
+        sui_tx:      existing.suiTx,
+        walrus_blob: existing.blobId,
+        certificate_url: existing.certificateUrl,
+        provenance_url: `/graph/${existing.mediaId}`,
+      });
+    }
+
     // Server keypair pays gas (sponsored transactions pattern)
     // The creator_address is stored as the identity anchor — WHO registered this
     const keypair = getKeypair();
@@ -206,10 +224,9 @@ app.post("/v1/register", upload.single("file"), async (req: Request, res: Respon
       keypair,
     );
 
-    const { raw: contentHash } = sha256(new Uint8Array(req.file.buffer));
     const pHash = computePerceptualHash(new Uint8Array(req.file.buffer));
-    const contentHashHex = Buffer.from(contentHash).toString("hex");
     const pHashHex = Buffer.from(pHash).toString("hex");
+    // contentHashHex already computed above for duplicate check
 
     const integrity = editType === EditType.AI_REMIX || aiScore >= 7500 ? 3
                     : editType !== EditType.ORIGINAL ? 1 : 0;
