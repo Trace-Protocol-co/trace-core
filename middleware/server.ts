@@ -1011,37 +1011,67 @@ app.get("/agent/evidence/:id", async (req: Request, res: Response) => {
 });
 
 // Research Agent — aggregate pattern analysis
-app.get("/agent/research", (_req: Request, res: Response) => {
-  const m = loadAgentMemory();
+app.get("/agent/research", async (_req: Request, res: Response) => {
+  const m        = loadAgentMemory();
   const registry = dbGetMemRegistry();
 
+  // Pull accurate stats from PostgreSQL — survives Render restarts
+  const [sightingStats, dbStats] = await Promise.all([
+    dbGetSightingStats(),
+    getStatsFromDb(),
+  ]);
+
+  const total    = sightingStats.total    || m?.total_scanned  || 0;
+  const verified = sightingStats.verified || m?.total_verified || 0;
+  const ai       = sightingStats.ai_generated || m?.total_ai  || 0;
+
+  // Build verdict distribution from PostgreSQL data
   const verdictBreakdown: Record<string, number> = {};
-  for (const seen of Object.values(m?.seen ?? {}) as {verdict: string}[]) {
-    verdictBreakdown[seen.verdict] = (verdictBreakdown[seen.verdict] ?? 0) + 1;
+  if (sightingStats.verified    > 0) verdictBreakdown["VERIFIED_ORIGINAL"] = sightingStats.verified;
+  if (sightingStats.unverified  > 0) verdictBreakdown["UNVERIFIED"]        = sightingStats.unverified;
+  if (sightingStats.ai_generated > 0) verdictBreakdown["AI_GENERATED"]     = sightingStats.ai_generated;
+  if (sightingStats.modified    > 0) verdictBreakdown["MODIFIED"]          = sightingStats.modified;
+
+  // Fall back to in-memory if PostgreSQL has nothing yet
+  if (Object.keys(verdictBreakdown).length === 0) {
+    for (const seen of Object.values(m?.seen ?? {}) as {verdict: string}[]) {
+      verdictBreakdown[seen.verdict] = (verdictBreakdown[seen.verdict] ?? 0) + 1;
+    }
   }
+
+  // Get latest MemWal blob
+  let walrusBlobId: string | null = m?.walrus_blob_id ?? null;
+  try {
+    const { recallMemories } = await import("../agent/memwal-integration.js");
+    const recent = await recallMemories("sighting", 1);
+    if (recent?.[0]?.blob_id) walrusBlobId = recent[0].blob_id;
+  } catch { /* non-critical */ }
 
   const report = {
     agent: "research",
     generated_at: new Date().toISOString(),
     dataset: {
-      total_bank_sightings:    m?.total_scanned ?? 0,
-      total_registered_media:  registry.size,
-      total_sessions:          m?.sessions?.length ?? 0,
-      active_anomaly_alerts:   m?.alerts?.repeated_fakes?.length ?? 0,
+      total_bank_sightings:   total,
+      total_registered_media: registry.size || dbStats.unique_media,
+      total_sessions:         m?.sessions?.length ?? 0,
+      active_anomaly_alerts:  m?.alerts?.repeated_fakes?.length ?? 0,
+      memwal_blobs_on_walrus: sightingStats.memwal_blobs,
+      first_sighting:         sightingStats.first_seen,
+      last_sighting:          sightingStats.last_seen,
     },
     verdict_distribution: verdictBreakdown,
-    integrity_rate: m?.total_scanned
-      ? `${((m.total_verified / m.total_scanned) * 100).toFixed(1)}%`
-      : "N/A",
-    ai_generation_rate: m?.total_scanned
-      ? `${((m.total_ai / m.total_scanned) * 100).toFixed(1)}%`
-      : "N/A",
-    top_anomalies:       (m?.alerts?.repeated_fakes ?? []).slice(0, 5),
-    walrus_memory_blob:  m?.walrus_blob_id ?? null,
-    walrus_explorer:     m?.walrus_blob_id
-      ? `https://walruscan.com/testnet/blob/${m.walrus_blob_id}`
+    integrity_rate: total > 0
+      ? `${((verified / total) * 100).toFixed(1)}%`
+      : "0.0%",
+    ai_generation_rate: total > 0
+      ? `${((ai / total) * 100).toFixed(1)}%`
+      : "0.0%",
+    top_anomalies:      (m?.alerts?.repeated_fakes ?? []).slice(0, 5),
+    walrus_memory_blob: walrusBlobId,
+    walrus_explorer:    walrusBlobId
+      ? `https://walruscan.com/testnet/blob/${walrusBlobId}`
       : null,
-    methodology: "TRACE Collective Memory Bank — MemWal on Walrus — anonymized sighting records",
+    methodology: "TRACE Collective Memory Bank — MemWal on Walrus — anonymized sighting records — PostgreSQL persistent storage",
     export_format: "JSON — Walrus-hosted artifact available on request",
   };
 
