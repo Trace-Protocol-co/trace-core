@@ -217,7 +217,26 @@ The bank is the fourth failure fixed. Stored in MemWal on Walrus.
 - **Coordinated behavior** — statistically abnormal simultaneous appearance across sources
 - **Variant detection** — similar pHash across multiple hashes shows mutation as media spreads
 
-### Verifying MemWal Integration
+### Verifying Walrus Blob Storage
+
+Every registered image creates a verifiable Walrus blob. Verify any blob directly on Walruscan:
+
+```
+https://walruscan.com/testnet/blob/<blob_id>
+```
+
+Example — a real TRACE-registered media blob:
+```
+https://walruscan.com/testnet/blob/EK6cmxOV9yDOuDI5FjA_Yl_oiqdGypMZMyzq44yeJ4A
+```
+
+Shows: Blob sender, Sui Object ID, file size, storage epochs, certify_blob transaction, reserve_space transaction. All on-chain, all verifiable.
+
+> Note: The raw aggregator URL (`aggregator.walrus-testnet.walrus.space/v1/<id>`) may return 404 briefly after upload due to CDN propagation delay. Use Walruscan for immediate verification.
+
+---
+
+## Verifying MemWal Integration
 ```bash
 # 1. Confirm connection
 curl https://trace-cbvb.onrender.com/agent/health
@@ -455,5 +474,6 @@ trace-extension/              Chrome MV3
 **TRACE is deployed infrastructure processing real Walrus blobs and real Sui transactions. MemWal semantic recall is live — every verification writes a sighting to Walrus-backed memory, retrievable by meaning across sessions.**
 
 ---
+
 
 **· Stack: Sui · Walrus · MemWal · Seal ·** License: MIT
