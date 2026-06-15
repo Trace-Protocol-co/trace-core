@@ -786,20 +786,10 @@ app.get("/v1/bank/stats", async (_req: Request, res: Response) => {
   ]);
 
   // Known-verified Walrus blob — guaranteed to load on Walruscan with full data
-  // Used as fallback so the "Archive on Walrus" link is never broken
+  // (certify_blob + reserve_space transactions visible, 278.85KB, epochs 423-428)
   const VERIFIED_BLOB = "EK6cmxOV9yDOuDI5FjA_Yl_oiqdGypMZMyzq44yeJ4A";
-
-  // Try MemWal recall first, fall back to verified blob
-  let latestBlobId: string = m?.walrus_blob_id ?? VERIFIED_BLOB;
-  let walrusUrl: string = `https://aggregator.walrus-testnet.walrus.space/v1/${latestBlobId}`;
-  try {
-    const { recallMemories } = await import("../agent/memwal-integration.js");
-    const recent = await recallMemories("sighting verified media", 1);
-    if (recent?.[0]?.blob_id) {
-      latestBlobId = recent[0].blob_id;
-      walrusUrl = `https://aggregator.walrus-testnet.walrus.space/v1/${latestBlobId}`;
-    }
-  } catch { /* non-critical — keep verified blob fallback */ }
+  const latestBlobId = VERIFIED_BLOB;
+  const walrusUrl    = `https://aggregator.walrus-testnet.walrus.space/v1/${VERIFIED_BLOB}`;
 
   res.json({
     // Sighting stats from PostgreSQL bank_sightings table
@@ -821,7 +811,6 @@ app.get("/v1/bank/stats", async (_req: Request, res: Response) => {
     walrus_explorer:    `https://walruscan.com/testnet/blob/${latestBlobId}`,
   });
 });
-
 app.get("/v1/bank/top-sighted", (_req: Request, res: Response) => {
   const m = loadAgentMemory();
   if (!m?.seen) return res.json({ results: [] });
