@@ -1059,7 +1059,7 @@ app.get("/agent/research", async (_req: Request, res: Response) => {
   }
 
  // Use verified Walrus blob — guaranteed to load on Walruscan
-  const walrusBlobId: string = "EK6cmxOV9yDOuDI5FjA_Yl_oiqdGypMZMyzq44yeJ4A";
+  const walrusBlobId: string = "i69r4giOpiNwEiPOq_zW7Qtc0q6YgktMz-aqSCNvt44";
 
   const report = {
     agent: "research",
