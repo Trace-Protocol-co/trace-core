@@ -22,7 +22,7 @@ export const CONFIG = {
   WALRUS_AGGREGATOR: process.env.WALRUS_AGGREGATOR ?? "https://aggregator.walrus-testnet.walrus.space",
   WALRUS_PUBLISHER: process.env.WALRUS_PUBLISHER ?? "https://publisher.walrus-testnet.walrus.space",
   WALRUS_EXPLORER: "https://walruscan.com/testnet/blob",
-  WALRUS_EPOCHS: parseInt(process.env.WALRUS_EPOCHS ?? "100"),
+  WALRUS_EPOCHS: parseInt(process.env.WALRUS_EPOCHS ?? "53"),
   CLOCK_ID: "0x6",
 } as const;
 
