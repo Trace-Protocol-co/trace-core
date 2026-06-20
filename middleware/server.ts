@@ -787,7 +787,7 @@ app.get("/v1/bank/stats", async (_req: Request, res: Response) => {
 
   // Known-verified Walrus blob — guaranteed to load on Walruscan with full data
   // (certify_blob + reserve_space transactions visible, 278.85KB, epochs 423-428)
-  const VERIFIED_BLOB = "EK6cmxOV9yDOuDI5FjA_Yl_oiqdGypMZMyzq44yeJ4A";
+ const VERIFIED_BLOB = "i69r4giOpiNwEiPOq_zW7Qtc0q6YgktMz-aqSCNvt44";
   const latestBlobId = VERIFIED_BLOB;
   const walrusUrl    = `https://aggregator.walrus-testnet.walrus.space/v1/${VERIFIED_BLOB}`;
 
